@@ -1,0 +1,15 @@
+name: OIDC Assume AWS Role
+description: Assume an AWS IAM role using a Buildkite OIDC token
+author: https://github.com/buildkite
+requirements:
+  - aws
+  - jq
+configuration:
+  properties:
+    role-arn:
+      type: string
+    role-session-name:
+      type: string
+  required:
+    - role-arn
+  additionalProperties: false
