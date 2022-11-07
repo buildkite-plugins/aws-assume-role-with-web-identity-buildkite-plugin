@@ -10,6 +10,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
+    - sj26/oidc-token
     - sj26/aws-assume-role-with-web-identity:
         role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
