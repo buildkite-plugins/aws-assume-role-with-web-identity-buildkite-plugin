@@ -9,7 +9,7 @@ fi
 
 echo "--- :buildkite::key::aws: Requesting an OIDC token for AWS from buildkite"
 
-BUILDKITE_OIDC_TOKEN=$(buildkite-agent oidc request-token --audience sts.amazonaws.com)
+BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com)"
 
 echo "--- :aws: Assuming role using OIDC token"
 
