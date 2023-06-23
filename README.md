@@ -28,11 +28,11 @@ locals {
 }
 
 data "tls_certificate" "buildkite-agent" {
-  url = locals.agent_endpoint
+  url = local.agent_endpoint
 }
 
 resource "aws_iam_openid_connect_provider" "buildkite-agent" {
-  url = locals.agent_endpoint
+  url = local.agent_endpoint
 
   client_id_list = [
     "sts.amazonaws.com",
