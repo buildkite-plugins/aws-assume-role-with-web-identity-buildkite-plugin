@@ -10,6 +10,8 @@ configuration:
       type: string
     role-session-name:
       type: string
+    role-session-duration:
+      type: integer
   required:
     - role-arn
   additionalProperties: false
