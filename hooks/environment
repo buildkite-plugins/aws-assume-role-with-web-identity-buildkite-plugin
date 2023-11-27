@@ -7,9 +7,16 @@ if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; 
   exit 1
 fi
 
+REQUEST_TOKEN_OPTIONAL_ARGS=
+ASSUME_ROLE_OPTIONAL_ARGS=
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
+  REQUEST_TOKEN_OPTIONAL_ARGS="${REQUEST_TOKEN_OPTIONAL_ARGS} --lifetime ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
+  ASSUME_ROLE_OPTIONAL_ARGS="${ASSUME_ROLE_OPTIONAL_ARGS} --duration-seconds ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
+fi
+
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from buildkite"
 
-BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com)"
+BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com ${REQUEST_TOKEN_OPTIONAL_ARGS})"
 
 echo "~~~ :aws: Assuming role using OIDC token"
 
@@ -18,7 +25,8 @@ echo "Role ARN: ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}"
 RESPONSE="$(aws sts assume-role-with-web-identity \
   --role-arn "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}" \
   --role-session-name "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}" \
-  --web-identity-token "${BUILDKITE_OIDC_TOKEN}")"
+  --web-identity-token "${BUILDKITE_OIDC_TOKEN}" \
+  ${ASSUME_ROLE_OPTIONAL_ARGS})"
 
 if [[ $? -ne 0 ]]; then
   echo "^^^ +++"
