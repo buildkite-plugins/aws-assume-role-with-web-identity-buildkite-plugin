@@ -1,6 +1,10 @@
 # AWS assume-role-with-web-identity
 
-A [Buildkite plugin](https://buildkite.com/docs/plugins) to [assume-role-with-web-identity](https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role-with-web-identity.html) using a Buildkite OIDC token before running the build command.
+A [Buildkite plugin] to [assume-role-with-web-identity] using a [Buildkite OIDC token] before running the build command.
+
+  [Buildkite plugin]: https://buildkite.com/docs/plugins
+  [assume-role-with-web-identity]: https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role-with-web-identity.html
+  [Buildkite OIDC token]: https://buildkite.com/docs/agent/v3/cli-oidc
 
 ## Usage
 
