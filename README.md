@@ -47,3 +47,38 @@ resource "aws_iam_openid_connect_provider" "buildkite-agent" {
   ]
 }
 ```
+
+The oidc request will set the audience and subject as follows:
+- Audience: `sts.amazonaws.com`
+- Subject: `organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:ref:<BRANCH_REF>:commit:<BUILD_COMMIT>:step:<STEP_ID>`
+
+In addition to the `aws_iam_openid_connect_provider` the role being assumed should have a trust policy that can be defined like so.
+Be sure to replace the <ORG_SLUG> and/or <PIPELINE_SLUG> placeholders.
+
+```terraform
+data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
+  statement {
+    sid     = "BuildkiteAssumeRole"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.buildkite-agent.arn]
+    }
+    condition {
+      test     = "ForAnyValue:StringLike"
+      variable = "agent.buildkite.com:sub"
+      values   = [
+        "organization:<ORG_SLUG>:pipeline:*", # Example: Allow any pipeline in the organization access
+        "organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:*", # Example: Restrict access to a pipeline in the organization
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "agent.buildkite.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
+}
+```
