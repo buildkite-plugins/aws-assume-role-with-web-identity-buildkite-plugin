@@ -2,13 +2,21 @@
 
 A [Buildkite plugin] to [assume-role-with-web-identity] using a [Buildkite OIDC token] before running the build command.
 
-  [Buildkite plugin]: https://buildkite.com/docs/plugins
-  [assume-role-with-web-identity]: https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role-with-web-identity.html
-  [Buildkite OIDC token]: https://buildkite.com/docs/agent/v3/cli-oidc
+[Buildkite plugin]: https://buildkite.com/docs/plugins
+[assume-role-with-web-identity]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html
+[assume-role-with-web-identity-options]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html#options
+[Buildkite OIDC token]: https://buildkite.com/docs/agent/v3/cli-oidc
 
-## Usage
+> [!IMPORTANT]
+> You will need to configure an appropriate [OIDC identity
+> provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html)
+> in your AWS account with a _Provider URL_ of `https://agent.buildkite.com` and
+> an _Audience_ of `sts.amazonaws.com`. This can be [automated with
+> Terraform](#terraform). Then you can [create a
+> role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html)
+> to be assumed.
 
-You will need to configure an appropriate [OIDC identity provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html) in your AWS account with a _Provider URL_ of `https://agent.buildkite.com` and an _Audience_ of `sts.amazonaws.com`. This can be [automated with Terraform](#terraform). Then you can [create a role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) to be assumed.
+## Example
 
 Use the plugin in your steps like this:
 
@@ -16,13 +24,33 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-    - aws-assume-role-with-web-identity:
-        role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
+      - aws-assume-role-with-web-identity#v1.0.0:
+          role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
 This will call `buildkite-agent oidc request-token --audience sts.amazonaws.com` and exchange the resulting token for AWS credentials which are then added into the environment so tools like the AWS CLI will use the assumed role.
 
-### Terraform
+## Configuration
+
+### `role-name` (required, string)
+
+The name of the IAM role this plugin should assume.
+
+### `role-session-name` (optional, string)
+
+The value of the [`role-session-name`][assume-role-with-web-identity-options] to pass with the STS request. This value can be [referred to in assume-role policy][sts-role-session-name], and will be recorded in Cloudtrail.
+
+Defaults to `buildkite-job-${BUILDKITE_JOB_ID}`.
+
+[sts-role-session-name]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html#ck_rolesessionname
+
+### `role-session-duration` (optional, integer)
+
+An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
+
+Defaults to `3600` (via the AWS CLI).
+
+## AWS configuration with Terraform
 
 If you automate your infrastructure with Terraform, the following configuration will setup a valid OIDC IdP in AWS -- adapted from [an example for using OIDC with EKS](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster.html#enabling-iam-roles-for-service-accounts):
 

@@ -1,0 +1,6 @@
+services:
+  lint:
+    image: buildkite/plugin-linter:v2.1.0
+    command: ['--id', 'aws-assume-role-with-web-identity']
+    volumes:
+      - ".:/plugin:ro"
