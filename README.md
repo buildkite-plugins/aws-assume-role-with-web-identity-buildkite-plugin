@@ -24,7 +24,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.0.0:
+      - aws-assume-role-with-web-identity#v1.1.0:
           role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
