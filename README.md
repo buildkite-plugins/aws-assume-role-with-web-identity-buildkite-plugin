@@ -50,6 +50,15 @@ An integer number of seconds that the assumed role session should last. Passed a
 
 Defaults to `3600` (via the AWS CLI).
 
+### `region` (optional, string)
+
+Exports `AWS_REGION` and `AWS_DEFAULT_REGION` with the value you set. If not set
+the values of `AWS_REGION` and `AWS_DEFAULT_REGION` will not be changed.
+
+Note that and `AWS_REGION` is used by the AWS CLI v2 and most SDKs.
+`AWS_DEFAULT_REGION` is included for compatibility with older SDKs and CLI
+versions.
+
 ## AWS configuration with Terraform
 
 If you automate your infrastructure with Terraform, the following configuration will setup a valid OIDC IdP in AWS -- adapted from [an example for using OIDC with EKS](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster.html#enabling-iam-roles-for-service-accounts):

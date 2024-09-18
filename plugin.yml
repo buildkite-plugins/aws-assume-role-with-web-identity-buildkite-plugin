@@ -12,6 +12,8 @@ configuration:
       type: string
     role-session-duration:
       type: integer
+    region:
+      type: string
   required:
     - role-arn
   additionalProperties: false
