@@ -14,7 +14,7 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURA
   ASSUME_ROLE_OPTIONAL_ARGS="${ASSUME_ROLE_OPTIONAL_ARGS} --duration-seconds ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
 fi
 
-echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from buildkite"
+echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
 
 BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com ${REQUEST_TOKEN_OPTIONAL_ARGS})"
 
