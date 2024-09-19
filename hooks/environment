@@ -16,13 +16,6 @@ fi
 
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
 
-region="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}"
-if [[ -n $region ]]; then
-  export AWS_REGION="$region"
-  export AWS_DEFAULT_REGION="$region"
-  echo "Using region: ${AWS_REGION}"
-fi
-
 BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com ${REQUEST_TOKEN_OPTIONAL_ARGS})"
 
 echo "~~~ :aws: Assuming role using OIDC token"
@@ -47,3 +40,10 @@ export AWS_SECRET_ACCESS_KEY="$(jq -r ".Credentials.SecretAccessKey" <<< "${RESP
 export AWS_SESSION_TOKEN="$(jq -r ".Credentials.SessionToken" <<< "${RESPONSE}")"
 
 echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${RESPONSE}")"
+
+region="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}"
+if [[ -n $region ]]; then
+  export AWS_REGION="$region"
+  export AWS_DEFAULT_REGION="$region"
+  echo "Using region: ${AWS_REGION}"
+fi

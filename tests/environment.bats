@@ -119,6 +119,32 @@ EOF
   unstub buildkite-agent
 }
 
+@test "region not used for STS call" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION="eu-central-1"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo \"STS-REGION:[\${AWS_REGION-<not set>}]\" 1>&2; cat tests/sts.json"
+
+  run run_test_command $PWD/hooks/environment
+
+  assert_success
+  assert_output --partial "Using region: eu-central-1"
+  assert_output --partial "Role ARN: role123"
+  refute_output --partial "STS-REGION:[eu-central-1]"
+  assert_output --partial "STS-REGION:[<not set>]"
+
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+  assert_output --partial "TESTRESULT:AWS_REGION=eu-central-1"
+  assert_output --partial "TESTRESULT:AWS_DEFAULT_REGION=eu-central-1"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
 @test "does not pass in a custom region" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
