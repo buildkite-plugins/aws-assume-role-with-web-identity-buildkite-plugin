@@ -24,7 +24,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.0.0:
+      - aws-assume-role-with-web-identity#v1.1.0:
           role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
@@ -49,6 +49,15 @@ Defaults to `buildkite-job-${BUILDKITE_JOB_ID}`.
 An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
 
 Defaults to `3600` (via the AWS CLI).
+
+### `region` (optional, string)
+
+Exports `AWS_REGION` and `AWS_DEFAULT_REGION` with the value you set. If not set
+the values of `AWS_REGION` and `AWS_DEFAULT_REGION` will not be changed.
+
+Note that and `AWS_REGION` is used by the AWS CLI v2 and most SDKs.
+`AWS_DEFAULT_REGION` is included for compatibility with older SDKs and CLI
+versions.
 
 ## AWS configuration with Terraform
 
