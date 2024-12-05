@@ -28,7 +28,8 @@ RESPONSE="$(aws sts assume-role-with-web-identity \
   --web-identity-token "${BUILDKITE_OIDC_TOKEN}" \
   ${ASSUME_ROLE_OPTIONAL_ARGS})"
 
-if [[ $? -ne 0 ]]; then
+ASSUME_ROLE_CMD_STATUS=$?
+if [[ ${ASSUME_ROLE_CMD_STATUS} -ne 0 ]]; then
   echo "^^^ +++"
   echo "Failed to assume AWS role:"
   echo "${RESPONSE}"
