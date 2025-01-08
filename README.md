@@ -12,7 +12,7 @@ A [Buildkite plugin] to [assume-role-with-web-identity] using a [Buildkite OIDC 
 > provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html)
 > in your AWS account with a _Provider URL_ of `https://agent.buildkite.com` and
 > an _Audience_ of `sts.amazonaws.com`. This can be [automated with
-> Terraform](#terraform). Then you can [create a
+> Terraform](#aws-configuration-with-terraform). Then you can [create a
 > role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html)
 > to be assumed.
 
