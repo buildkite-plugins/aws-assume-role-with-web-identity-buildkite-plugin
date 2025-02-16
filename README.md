@@ -50,6 +50,20 @@ An integer number of seconds that the assumed role session should last. Passed a
 
 Defaults to `3600` (via the AWS CLI).
 
+### `session-tags` (optional, string)
+
+A comma separated list of [claims supported in Buildkite OIDC
+tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the
+returned OIDC tokens will have the requested claims duplicated into AWS Session
+Tokens. These can then be checked in Conditions on the IAM Role Trist Policy.
+
+Eg. `organization_slug,pipeline_slug,build_branch`
+
+Defaults to `` (empty).
+
+> [!NOTE]
+> `session-tags` requires buildkite-agent v3.83.0 or better
+
 ### `region` (optional, string)
 
 Exports `AWS_REGION` and `AWS_DEFAULT_REGION` with the value you set. If not set
@@ -58,6 +72,123 @@ the values of `AWS_REGION` and `AWS_DEFAULT_REGION` will not be changed.
 Note that and `AWS_REGION` is used by the AWS CLI v2 and most SDKs.
 `AWS_DEFAULT_REGION` is included for compatibility with older SDKs and CLI
 versions.
+
+## IAM Role Trust Policies
+
+There are two main options for defining which Buildkite OIDC tokens are permitted to assume an IAM Role.
+
+### Without Session Tags
+
+This is the default behaviour of this plugin. Given a Buildkite pipeline step like so:
+
+```yaml
+steps:
+  - command: aws sts get-caller-identity
+    plugins:
+      - aws-assume-role-with-web-identity#v1.1.0:
+          role-arn: arn:aws:iam::111111111111:role/example-role
+```
+The following trust policy on the IAM role will permit a Buildkite Job to assume the role if:
+
+* The organization slug is `ORG_SLUG`
+* The pipeline slug is `PIPELINE_SLUG`
+* The build is for the `main` branch
+* The agent is using either of the two provided IP addresses
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::111111111111:oidc-provider/agent.buildkite.com"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {
+                    "agent.buildkite.com:aud": "sts.amazonaws.com"
+                },
+                "StringLike": {
+                    "agent.buildkite.com:sub": "organization:ORG_SLUG:pipeline:PIPELINE_SLUG:ref:main:*"
+                },
+                "IpAddress": {
+                    "aws:SourceIp": [
+                        "AGENT_PUBLIC_IP_ONE",
+                        "AGENT_PUBLIC_IP_TWO"
+                    ]
+                }
+
+            }
+        }
+    ]
+}
+```
+
+### With Session Tags
+
+Alternatively, the Buildkite pipeline step can include the `session-tags` option:
+
+```yaml
+steps:
+  - command: aws sts get-caller-identity
+    plugins:
+      - aws-assume-role-with-web-identity#v1.1.0:
+          role-arn: arn:aws:iam::111111111111:role/example-role
+          session-tags: organization_slug,pipeline_slug,build_branch
+```
+This means the trust policy on the IAM role can implement the same conditions, but avoid the error prone `sub` claim:
+
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::111111111111:oidc-provider/agent.buildkite.com"
+            },
+            "Action": [
+                "sts:AssumeRoleWithWebIdentity",
+                "sts:TagSession"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "agent.buildkite.com:aud": "sts.amazonaws.com"
+                },
+                "ForAnyValue:StringEquals": {
+                    "aws:RequestTag/organization_slug": "ORG_SLUG",
+                    "aws:RequestTag/pipeline_slug": "PIPELINE_SLUG",
+                    "aws:RequestTag/build_branch": "main"
+                },
+                "IpAddress": {
+                    "aws:SourceIp": [
+                        "AGENT_PUBLIC_IP_ONE",
+                        "AGENT_PUBLIC_IP_TWO"
+                    ]
+                }
+            }
+        }
+    ]
+}
+```
+
+A useful pattern with `session-tags` is to request the `organization_id` and `pipeline_id` claims. These values
+are UUIDs that will never change, so they:
+
+* will continue to work even if an organization or pipeline is renamed
+* mitigate any risk of being reused by different organizations or pipelines in
+  the future, should the intended organization or pipeline be deleted
+
+```yaml
+steps:
+  - command: aws sts get-caller-identity
+    plugins:
+      - aws-assume-role-with-web-identity#v1.1.0:
+          role-arn: arn:aws:iam::111111111111:role/example-role
+          session-tags: organization_id,pipeline_id
+```
 
 ## AWS configuration with Terraform
 
