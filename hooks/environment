@@ -16,7 +16,7 @@ fi
 
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
 
-BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com ${REQUEST_TOKEN_OPTIONAL_ARGS})"
+BUILDKITE_OIDC_TOKEN="$(buildkite-agent oidc request-token --audience sts.amazonaws.com --aws-session-tag "organization_slug,pipeline_slug,build_branch" ${REQUEST_TOKEN_OPTIONAL_ARGS})"
 
 echo "~~~ :aws: Assuming role using OIDC token"
 
