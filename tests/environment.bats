@@ -131,6 +131,7 @@ EOF
   run run_test_command $PWD/hooks/environment
 
   assert_success
+  assert_output --partial "Including session tags in OIDC request: organization_id,pipeline_id"
   assert_output --partial "Role ARN: role123"
 
   assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
