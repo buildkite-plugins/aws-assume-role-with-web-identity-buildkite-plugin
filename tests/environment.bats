@@ -122,7 +122,8 @@ EOF
 @test "passes in a set of session-tags" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS="organization_id,pipeline_id"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_0="organization_id"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_1="pipeline_id"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"

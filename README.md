@@ -50,14 +50,21 @@ An integer number of seconds that the assumed role session should last. Passed a
 
 Defaults to `3600` (via the AWS CLI).
 
-### `session-tags` (optional, string)
+### `session-tags` (optional, array)
 
-A comma separated list of [claims supported in Buildkite OIDC
+A list of [claims supported in Buildkite OIDC
 tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the
 returned OIDC tokens will have the requested claims duplicated into AWS Session
 Tokens. These can then be checked in Conditions on the IAM Role Trist Policy.
 
-Eg. `organization_slug,pipeline_slug,build_branch`
+Eg.
+
+```yaml
+session-tags:
+- organization_slug
+- pipeline_slug
+- build_branch
+```
 
 Defaults to `` (empty).
 
@@ -135,7 +142,10 @@ steps:
     plugins:
       - aws-assume-role-with-web-identity#v1.1.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
-          session-tags: organization_slug,pipeline_slug,build_branch
+          session-tags:
+          - organization_slug
+          - pipeline_slug
+          - build_branch
 ```
 This means the trust policy on the IAM role can implement the same conditions, but avoid the error prone `sub` claim:
 
@@ -187,7 +197,9 @@ steps:
     plugins:
       - aws-assume-role-with-web-identity#v1.1.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
-          session-tags: organization_id,pipeline_id
+          session-tags:
+          - organization_id
+          - pipeline_id
 ```
 
 ## AWS configuration with Terraform
