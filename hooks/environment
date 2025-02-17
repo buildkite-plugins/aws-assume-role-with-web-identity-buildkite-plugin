@@ -7,51 +7,48 @@ if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; 
   exit 1
 fi
 
-REQUEST_TOKEN_OPTIONAL_ARGS="${REQUEST_TOKEN_OPTIONAL_ARGS:-}"
-ASSUME_ROLE_OPTIONAL_ARGS="${ASSUME_ROLE_OPTIONAL_ARGS:-}"
+role_arn=$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN
+session_name=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}
 
+# prepare Buildkite command; optional args to be added before executing
+request_token_cmd=(buildkite-agent oidc request-token --audience sts.amazonaws.com)
+
+# prepare AWS command; OIDC token and optional args to be added before executing
+assume_role_cmd=(aws sts assume-role-with-web-identity
+  --role-arn "$role_arn"
+  --role-session-name "$session_name")
+
+# optionally add the session duration to Buildkite and AWS commands
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
-  REQUEST_TOKEN_OPTIONAL_ARGS="${REQUEST_TOKEN_OPTIONAL_ARGS} --lifetime ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
-  ASSUME_ROLE_OPTIONAL_ARGS="${ASSUME_ROLE_OPTIONAL_ARGS} --duration-seconds ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
+  ttl_seconds=$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION")
+  request_token_cmd+=(--lifetime "$ttl_seconds")
+  assume_role_cmd+=(--duration-seconds "$ttl_seconds")
 fi
 
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
-
-REQUEST_TOKEN_CMD="buildkite-agent oidc request-token --audience sts.amazonaws.com"
-
-if [[ -n "${REQUEST_TOKEN_OPTIONAL_ARGS:-}" ]]; then
-  REQUEST_TOKEN_CMD="${REQUEST_TOKEN_CMD} ${REQUEST_TOKEN_OPTIONAL_ARGS}"
-fi
-
-BUILDKITE_OIDC_TOKEN="$(eval "${REQUEST_TOKEN_CMD}")"
+buildkite_oidc_token=$("${request_token_cmd[@]}")
 
 echo "~~~ :aws: Assuming role using OIDC token"
-echo "Role ARN: ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}"
+echo "Role ARN: ${role_arn}"
+assume_role_cmd+=(--web-identity-token "$buildkite_oidc_token")
+assume_role_response=$("${assume_role_cmd[@]}")
+assume_role_cmd_status=$?
 
-ASSUME_ROLE_CMD="aws sts assume-role-with-web-identity --role-arn ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN} --role-session-name ${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}} --web-identity-token ${BUILDKITE_OIDC_TOKEN}"
-
-if [[ -n "${ASSUME_ROLE_OPTIONAL_ARGS}" ]]; then
-  ASSUME_ROLE_CMD="${ASSUME_ROLE_CMD} ${ASSUME_ROLE_OPTIONAL_ARGS}"
-fi
-
-ASSUME_ROLE_RESPONSE=$(eval "${ASSUME_ROLE_CMD}")
-ASSUME_ROLE_CMD_STATUS=$?
-
-if [[ ${ASSUME_ROLE_CMD_STATUS} -ne 0 ]]; then
+if [[ ${assume_role_cmd_status} -ne 0 ]]; then
   echo "^^^ +++"
   echo "Failed to assume AWS role:"
-  echo "${ASSUME_ROLE_RESPONSE}"
+  echo "${assume_role_response}"
   exit 1
 fi
 
-AWS_ACCESS_KEY_ID="$(jq -r ".Credentials.AccessKeyId" <<< "${ASSUME_ROLE_RESPONSE}")"
-AWS_SECRET_ACCESS_KEY="$(jq -r ".Credentials.SecretAccessKey" <<< "${ASSUME_ROLE_RESPONSE}")"
-AWS_SESSION_TOKEN="$(jq -r ".Credentials.SessionToken" <<< "${ASSUME_ROLE_RESPONSE}")"
+AWS_ACCESS_KEY_ID="$(jq -r ".Credentials.AccessKeyId" <<< "${assume_role_response}")"
+AWS_SECRET_ACCESS_KEY="$(jq -r ".Credentials.SecretAccessKey" <<< "${assume_role_response}")"
+AWS_SESSION_TOKEN="$(jq -r ".Credentials.SessionToken" <<< "${assume_role_response}")"
 export AWS_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY
 export AWS_SESSION_TOKEN
 
-echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${ASSUME_ROLE_RESPONSE}")"
+echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
 
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
   export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"
