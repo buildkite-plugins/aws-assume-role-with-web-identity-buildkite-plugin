@@ -14,6 +14,8 @@ configuration:
       type: integer
     region:
       type: string
+    session-tags:
+      type: array
   required:
     - role-arn
   additionalProperties: false
