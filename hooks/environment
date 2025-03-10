@@ -56,18 +56,16 @@ fi
 # Use default empty prefix if not set
 CREDENTIAL_NAME_PREFIX=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX:-}
 
-# Extract credentials from assume-role response
-credentials_json="$(jq -r '.Credentials' <<< "${assume_role_response}")"
 if [ "${CREDENTIAL_NAME_PREFIX}" != "" ]; then
   # Set prefixed variables
-  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=$(jq -r '.AccessKeyId' <<< "${credentials_json}")"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=$(jq -r '.SecretAccessKey' <<< "${credentials_json}")"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=$(jq -r '.SessionToken' <<< "${credentials_json}")"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' <<< "${assume_role_response}")"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' <<< "${assume_role_response}")"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' <<< "${assume_role_response}")"
 else
   # Set standard variables
-  export AWS_ACCESS_KEY_ID="$(jq -r '.AccessKeyId' <<< "${credentials_json}")"
-  export AWS_SECRET_ACCESS_KEY="$(jq -r '.SecretAccessKey' <<< "${credentials_json}")"
-  export AWS_SESSION_TOKEN="$(jq -r '.SessionToken' <<< "${credentials_json}")"
+  export AWS_ACCESS_KEY_ID="$(jq -r '.Credentials.AccessKeyId' <<< "${assume_role_response}")"
+  export AWS_SECRET_ACCESS_KEY="$(jq -r '.Credentials.SecretAccessKey' <<< "${assume_role_response}")"
+  export AWS_SESSION_TOKEN="$(jq -r '.Credentials.SessionToken' <<< "${assume_role_response}")"
 fi
 
 echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
