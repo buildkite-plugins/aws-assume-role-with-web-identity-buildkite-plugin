@@ -50,6 +50,14 @@ An integer number of seconds that the assumed role session should last. Passed a
 
 Defaults to `3600` (via the AWS CLI).
 
+### `external-id` (optional, string)
+
+The value of the [`external-id`][assume-role-with-web-identity-options] to pass
+with the STS request. This value can be [referred to in assume-role
+policy][sts-external-id], and will be recorded in Cloudtrail.
+
+[sts-external-id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html#ck_externalid
+
 ### `session-tags` (optional, array)
 
 A list of [claims supported in Buildkite OIDC

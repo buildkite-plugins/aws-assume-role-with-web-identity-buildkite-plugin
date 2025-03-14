@@ -14,6 +14,7 @@ fi
 
 role_arn=$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN
 session_name=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}
+external_id=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_EXTERNAL_ID:-}
 
 # prepare Buildkite command; optional args to be added before executing
 request_token_cmd=(buildkite-agent oidc request-token --audience sts.amazonaws.com)
@@ -28,6 +29,11 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURA
   ttl_seconds=$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION")
   request_token_cmd+=(--lifetime "$ttl_seconds")
   assume_role_cmd+=(--duration-seconds "$ttl_seconds")
+fi
+
+# optionally add the external ID if provided
+if [[ -n "$external_id" ]]; then
+  assume_role_cmd+=(--external-id "$external_id")
 fi
 
 # If the user has provided a specific set of claims to include in the token as AWS session tags, we'll request them
