@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# This hook only runs if the hook parameter is set to "pre-command".
+
+if [[ "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK:-}" == "pre-command" ]]; then
+	echo "Running in the pre-command hook"
+else
+	echo "Skipping pre-command hook"
+	exit 0
+fi
+
+DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)"
+
+# shellcheck source=lib/plugin.bash
+. "$DIR/../lib/plugin.bash"
