@@ -12,8 +12,8 @@ if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; 
   exit 1
 fi
 
-role_arn=$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN
-session_name=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}
+role_arn="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}"
+session_name="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}"
 
 # prepare Buildkite command; optional args to be added before executing
 request_token_cmd=(buildkite-agent oidc request-token --audience sts.amazonaws.com)
@@ -31,7 +31,7 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURA
 fi
 
 # If the user has provided a specific set of claims to include in the token as AWS session tags, we'll request them
-if plugin_read_list_into_result BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS ; then
+if plugin_read_list_into_result BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS; then
   claims=$(join_by "," "${result[@]}")
   request_token_cmd+=(--aws-session-tag "${claims}")
   echo "Including session tags in OIDC request: ${claims}"
@@ -54,18 +54,21 @@ if [[ ${assume_role_cmd_status} -ne 0 ]]; then
 fi
 
 # Use default empty prefix if not set
-CREDENTIAL_NAME_PREFIX=${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX:-}
+CREDENTIAL_NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX:-}"
 
-if [ "${CREDENTIAL_NAME_PREFIX}" != "" ]; then
-  # Set prefixed variables
-  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' <<< "${assume_role_response}")"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' <<< "${assume_role_response}")"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' <<< "${assume_role_response}")"
+# Parse credentials once
+credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${assume_role_response}")
+read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+
+# Export credentials with or without prefix
+if [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
+  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 else
-  # Set standard variables
-  export AWS_ACCESS_KEY_ID="$(jq -r '.Credentials.AccessKeyId' <<< "${assume_role_response}")"
-  export AWS_SECRET_ACCESS_KEY="$(jq -r '.Credentials.SecretAccessKey' <<< "${assume_role_response}")"
-  export AWS_SESSION_TOKEN="$(jq -r '.Credentials.SessionToken' <<< "${assume_role_response}")"
+  export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+  export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+  export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 fi
 
 echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
