@@ -6,6 +6,8 @@ requirements:
   - jq
 configuration:
   properties:
+    credential-name-prefix:
+      type: string
     role-arn:
       type: string
     role-session-name:

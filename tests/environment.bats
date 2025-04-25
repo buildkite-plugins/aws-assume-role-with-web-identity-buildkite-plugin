@@ -10,11 +10,20 @@ load "$BATS_PLUGIN_PATH/load.bash"
 run_test_command() {
   source "$@"
 
+  # Original variables
   echo "TESTRESULT:AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-"<value not set>"}"
   echo "TESTRESULT:AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-"<value not set>"}"
   echo "TESTRESULT:AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-"<value not set>"}"
   echo "TESTRESULT:AWS_REGION=${AWS_REGION:-"<value not set>"}"
   echo "TESTRESULT:AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"<value not set>"}"
+  
+  # Add prefixed variables if prefix is set
+  if [ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]; then
+    prefix="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX}"
+    eval "echo \"TESTRESULT:${prefix}AWS_ACCESS_KEY_ID=\${${prefix}AWS_ACCESS_KEY_ID:-'<value not set>'}\""
+    eval "echo \"TESTRESULT:${prefix}AWS_SECRET_ACCESS_KEY=\${${prefix}AWS_SECRET_ACCESS_KEY:-'<value not set>'}\""
+    eval "echo \"TESTRESULT:${prefix}AWS_SESSION_TOKEN=\${${prefix}AWS_SESSION_TOKEN:-'<value not set>'}\""
+  fi
 }
 
 @test "calls aws sts and exports AWS_ env vars" {
@@ -186,6 +195,34 @@ EOF
   assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
   assert_output --partial "TESTRESULT:AWS_REGION=<value not set>"
   assert_output --partial "TESTRESULT:AWS_DEFAULT_REGION=<value not set>"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "uses credential name prefix when specified" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX="MY_PREFIX_"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command $PWD/hooks/environment
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+
+  # Check that prefixed environment variables are set
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_SESSION_TOKEN=session-token-value"
+
+  # Original variables should not be set
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=<value not set>"
 
   unstub aws
   unstub buildkite-agent
