@@ -270,14 +270,14 @@ data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
 }
 ```
 
-## Credential Prefix
+## Credential Name Prefix
 
-The plugin supports a `credential-prefix` option to prefix the default AWS credential names with a specific string. This is useful when you have multiple AWS credentials in your environment and you want to avoid conflicts.
+The plugin supports a `credential-name-prefix` option to prefix the default AWS credential names with a specific string. This is useful when you have multiple AWS credentials in your environment and you want to avoid conflicts.
 
-For example, by setting `credential-prefix:MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
+For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
 
 ```yaml
 plugins:
   - aws-assume-role-with-web-identity#v1.2.0:
-      credential-prefix:MY_PREFIX_
+      credential-name-prefix:MY_PREFIX_
 ```

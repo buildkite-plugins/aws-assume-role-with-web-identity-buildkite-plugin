@@ -18,8 +18,8 @@ run_test_command() {
   echo "TESTRESULT:AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"<value not set>"}"
   
   # Add prefixed variables if prefix is set
-  if [ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX:-}" ]; then
-    prefix="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX}"
+  if [ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]; then
+    prefix="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX}"
     eval "echo \"TESTRESULT:${prefix}AWS_ACCESS_KEY_ID=\${${prefix}AWS_ACCESS_KEY_ID:-'<value not set>'}\""
     eval "echo \"TESTRESULT:${prefix}AWS_SECRET_ACCESS_KEY=\${${prefix}AWS_SECRET_ACCESS_KEY:-'<value not set>'}\""
     eval "echo \"TESTRESULT:${prefix}AWS_SESSION_TOKEN=\${${prefix}AWS_SESSION_TOKEN:-'<value not set>'}\""
@@ -200,10 +200,10 @@ EOF
   unstub buildkite-agent
 }
 
-@test "uses credential prefix when specified" {
+@test "uses credential name prefix when specified" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PREFIX="MY_PREFIX_"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX="MY_PREFIX_"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
