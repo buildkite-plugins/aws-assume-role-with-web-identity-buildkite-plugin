@@ -47,6 +47,28 @@ run_test_command() {
   unstub buildkite-agent
 }
 
+@test "calls aws sts and exports AWS_ env vars in pre-command hook" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK="pre-command"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command $PWD/hooks/pre-command
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
 @test "failure to get token" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
@@ -226,4 +248,14 @@ EOF
 
   unstub aws
   unstub buildkite-agent
+
+@test "environment hook does nothing when configured to use the pre-command hook" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK="pre-command"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  run run_test_command $PWD/hooks/environment
+
+  assert_success
+  assert_output --partial "Skipping environment hook"
 }

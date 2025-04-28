@@ -90,6 +90,21 @@ For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will expo
 plugins:
   - aws-assume-role-with-web-identity#v1.3.0:
       credential-name-prefix:MY_PREFIX_
+
+### `hook` (optional, string)
+
+The hook to run. Can be either `environment` (the default) or `pre-command`.
+
+Useful for when using a plugin such as the `artifacts` plugin that runs as a
+`pre-command` hook, and you need that to run with the pipeline role before then
+assuming your IAM role like so:
+```
+    plugins:
+      - artifacts#v1.9.4:
+          download: "out/*"
+      - aws-assume-role-with-web-identity#v1.3.0
+          hook: pre-command
+          role-arn: arn:aws:iam::111111111111:role/example-role
 ```
 
 ## IAM Role Trust Policies
