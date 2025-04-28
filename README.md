@@ -32,9 +32,9 @@ This will call `buildkite-agent oidc request-token --audience sts.amazonaws.com`
 
 ## Configuration
 
-### `role-name` (required, string)
+### `role-arn` (required, string)
 
-The name of the IAM role this plugin should assume.
+ARN of the IAM role this plugin should assume.
 
 ### `role-session-name` (optional, string)
 
