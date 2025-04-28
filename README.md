@@ -24,7 +24,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.2.0:
+      - aws-assume-role-with-web-identity#v1.3.0:
           role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
@@ -32,9 +32,9 @@ This will call `buildkite-agent oidc request-token --audience sts.amazonaws.com`
 
 ## Configuration
 
-### `role-name` (required, string)
+### `role-arn` (required, string)
 
-The name of the IAM role this plugin should assume.
+ARN of the IAM role this plugin should assume.
 
 ### `role-session-name` (optional, string)
 
@@ -80,6 +80,18 @@ Note that and `AWS_REGION` is used by the AWS CLI v2 and most SDKs.
 `AWS_DEFAULT_REGION` is included for compatibility with older SDKs and CLI
 versions.
 
+### `credential-name-prefix` (optional, string)
+
+The plugin supports a `credential-name-prefix` option to prefix the default AWS credential names with a specific string. This is useful when you have multiple AWS credentials in your environment and you want to avoid conflicts.
+
+For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
+
+```yaml
+plugins:
+  - aws-assume-role-with-web-identity#v1.3.0:
+      credential-name-prefix:MY_PREFIX_
+```
+
 ## IAM Role Trust Policies
 
 There are two main options for defining which Buildkite OIDC tokens are permitted to assume an IAM Role.
@@ -92,7 +104,7 @@ This is the default behaviour of this plugin. Given a Buildkite pipeline step li
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.2.0:
+      - aws-assume-role-with-web-identity#v1.3.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
 The following trust policy on the IAM role will permit a Buildkite Job to assume the role if:
@@ -140,7 +152,7 @@ Alternatively, the Buildkite pipeline step can include the `session-tags` option
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.2.0:
+      - aws-assume-role-with-web-identity#v1.3.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
           session-tags:
           - organization_slug
@@ -202,7 +214,7 @@ are UUIDs that will never change, so they:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.2.0:
+      - aws-assume-role-with-web-identity#v1.3.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
           session-tags:
           - organization_id
@@ -268,16 +280,4 @@ data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
     }
   }
 }
-```
-
-## Credential Name Prefix
-
-The plugin supports a `credential-name-prefix` option to prefix the default AWS credential names with a specific string. This is useful when you have multiple AWS credentials in your environment and you want to avoid conflicts.
-
-For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
-
-```yaml
-plugins:
-  - aws-assume-role-with-web-identity#v1.2.0:
-      credential-name-prefix:MY_PREFIX_
 ```
