@@ -90,6 +90,7 @@ For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will expo
 plugins:
   - aws-assume-role-with-web-identity#v1.3.0:
       credential-name-prefix:MY_PREFIX_
+```
 
 ### `hook` (optional, string)
 
