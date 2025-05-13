@@ -8,7 +8,7 @@ load "$BATS_PLUGIN_PATH/load.bash"
 # Source the command and print environment variables to allow for assertions.
 # This could be done by skipping the "run" command, but it makes for a more readable test.
 run_test_command() {
-  source "$@"
+  source "$PWD/lib/plugin.bash"
 
   # Original variables
   echo "TESTRESULT:AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-"<value not set>"}"
@@ -33,7 +33,7 @@ run_test_command() {
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Role ARN: role123"
@@ -49,13 +49,12 @@ run_test_command() {
 
 @test "calls aws sts and exports AWS_ env vars in pre-command hook" {
   export BUILDKITE_JOB_ID="job-uuid-42"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK="pre-command"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/pre-command
+  run run_test_command
 
   assert_success
   assert_output --partial "Role ARN: role123"
@@ -75,7 +74,7 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'failed to get OIDC token' >&2; false"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_failure
   assert_output <<EOF
@@ -92,7 +91,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo 'Not authorized to perform sts:AssumeRoleWithWebIdentity' >&2; false"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_failure
   assert_output <<EOF
@@ -112,7 +111,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 43200 : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Role ARN: role123"
@@ -134,7 +133,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Using region: eu-central-1"
@@ -159,7 +158,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Including session tags in OIDC request: organization_id,pipeline_id"
@@ -181,7 +180,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo \"STS-REGION:[\${AWS_REGION-<not set>}]\" 1>&2; cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Using region: eu-central-1"
@@ -206,7 +205,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Role ARN: role123"
@@ -230,7 +229,7 @@ EOF
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Role ARN: role123"
@@ -255,7 +254,7 @@ EOF
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK="pre-command"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
-  run run_test_command $PWD/hooks/environment
+  run run_test_command
 
   assert_success
   assert_output --partial "Skipping environment hook"
