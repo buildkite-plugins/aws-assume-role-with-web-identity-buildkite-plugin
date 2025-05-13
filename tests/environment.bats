@@ -16,7 +16,7 @@ run_test_command() {
   echo "TESTRESULT:AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-"<value not set>"}"
   echo "TESTRESULT:AWS_REGION=${AWS_REGION:-"<value not set>"}"
   echo "TESTRESULT:AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"<value not set>"}"
-  
+
   # Add prefixed variables if prefix is set
   if [ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]; then
     prefix="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX}"
@@ -248,6 +248,7 @@ EOF
 
   unstub aws
   unstub buildkite-agent
+}
 
 @test "environment hook does nothing when configured to use the pre-command hook" {
   export BUILDKITE_JOB_ID="job-uuid-42"

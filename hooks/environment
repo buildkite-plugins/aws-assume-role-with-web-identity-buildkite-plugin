@@ -4,8 +4,7 @@ set -euo pipefail
 
 # This is the default hook to run if the hook parameter is not set.
 
-HOOK_PARAM="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK:-}"
-if [[ -z "$HOOK_PARAM" || "$HOOK_PARAM" == "environment" ]]; then
+if [[ "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_HOOK:-environment}" == "environment" ]]; then
 	echo "Running in the environment hook"
 else
 	echo "Skipping environment hook"
