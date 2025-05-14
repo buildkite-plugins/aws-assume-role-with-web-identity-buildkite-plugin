@@ -4,7 +4,7 @@ set -euo pipefail
 
 DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)"
 
-# shellcheck source=shared.bash
+# shellcheck source=lib/shared.bash
 . "$DIR/shared.bash"
 
 if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; then
