@@ -8,22 +8,20 @@ load "$BATS_PLUGIN_PATH/load.bash"
 # Source the command and print environment variables to allow for assertions.
 # This could be done by skipping the "run" command, but it makes for a more readable test.
 run_test_command() {
-  source "$PWD/lib/plugin.bash"
+  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION)
+  local NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}"
 
-  # Original variables
-  echo "TESTRESULT:AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-"<value not set>"}"
-  echo "TESTRESULT:AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-"<value not set>"}"
-  echo "TESTRESULT:AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-"<value not set>"}"
-  echo "TESTRESULT:AWS_REGION=${AWS_REGION:-"<value not set>"}"
-  echo "TESTRESULT:AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"<value not set>"}"
-
-  # Add prefixed variables if prefix is set
-  if [ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]; then
-    prefix="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX}"
-    eval "echo \"TESTRESULT:${prefix}AWS_ACCESS_KEY_ID=\${${prefix}AWS_ACCESS_KEY_ID:-'<value not set>'}\""
-    eval "echo \"TESTRESULT:${prefix}AWS_SECRET_ACCESS_KEY=\${${prefix}AWS_SECRET_ACCESS_KEY:-'<value not set>'}\""
-    eval "echo \"TESTRESULT:${prefix}AWS_SESSION_TOKEN=\${${prefix}AWS_SESSION_TOKEN:-'<value not set>'}\""
-  fi
+  ( # using a subshell to avoid polluting the test environment
+    # shellcheck source=lib/plugin.bash
+    source "$PWD/lib/plugin.bash"
+    for var in "${VARNAMES[@]}"; do
+      echo "TESTRESULT:${var}=${!var:-<value not set>}"
+      if [ -n "${NAME_PREFIX}" ]; then
+        varname="${NAME_PREFIX}${var}"
+        echo "TESTRESULT:${varname}=${!varname:-<value not set>}"
+      fi
+    done
+  )
 }
 
 @test "calls aws sts and exports AWS_ env vars" {
