@@ -8,6 +8,8 @@ configuration:
   properties:
     credential-name-prefix:
       type: string
+    hook:
+      type: string
     role-arn:
       type: string
     role-session-name:
