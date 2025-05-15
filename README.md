@@ -24,7 +24,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.3.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
@@ -88,7 +88,7 @@ For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will expo
 
 ```yaml
 plugins:
-  - aws-assume-role-with-web-identity#v1.3.0:
+  - aws-assume-role-with-web-identity#v1.4.0:
       credential-name-prefix:MY_PREFIX_
 ```
 
@@ -103,7 +103,7 @@ assuming your IAM role like so:
     plugins:
       - artifacts#v1.9.4:
           download: "out/*"
-      - aws-assume-role-with-web-identity#v1.3.0
+      - aws-assume-role-with-web-identity#v1.4.0
           hook: pre-command
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
@@ -120,7 +120,7 @@ This is the default behaviour of this plugin. Given a Buildkite pipeline step li
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.3.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
 The following trust policy on the IAM role will permit a Buildkite Job to assume the role if:
@@ -168,7 +168,7 @@ Alternatively, the Buildkite pipeline step can include the `session-tags` option
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.3.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
           session-tags:
           - organization_slug
@@ -230,7 +230,7 @@ are UUIDs that will never change, so they:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.3.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
           session-tags:
           - organization_id
