@@ -301,3 +301,13 @@ data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
   }
 }
 ```
+
+## Compatibility
+
+| Elastic Stack | Agent Stack K8s | Hosted (Mac) | Hosted (Linux) | Notes |
+| :-----------: | :-------------: | :----: | :----: |:---- |
+| ✅ | ❌ | ⚠️ | ⚠️ | *k8s stack* does not possess `aws` <br/> *Hosted agents* require AWS credentials on machine to perform `aws` command |
+
+- ✅ Fully supported (all combinations of attributes have been tested to pass)
+- ⚠️ Partially supported (some combinations cause errors/issues)
+- ❌ Not supported
