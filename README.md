@@ -175,11 +175,12 @@ steps:
           - pipeline_slug
           - build_branch
 ```
-This means the trust policy on the IAM role can implement the same conditions, but avoid the error prone `sub` claim.
+
+This means the trust policy on the IAM role can implement the same conditions, but minimise reliance on the overloaded `sub` claim. Note that [AWS requires the `agent.buildkite.com:sub` claim](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc_secure-by-default.html) to be specified in cases where an IAM role's trust policy uses federation with Buildkite OIDC.
 
 For the conditions to pass and the role assumption to be approved, the OIDC token must:
 
-* Must match all 5 conditions (`agent.buildkite.com:aud`, `aws:RequestTag/organization_slug`, `aws:RequestTag/pipeline_slug`
+* Must match all 6 conditions (`agent.buildkite.com:sub`, `agent.buildkite.com:aud`, `aws:RequestTag/organization_slug`, `aws:RequestTag/pipeline_slug`
   `aws:RequestTag/build_branch` and `aws:SourceIp`). That is, they are checked with a logical AND
 * Can match `aws:RequestTag/build_branch` with either `main` or `production`. When multiple values are
   provided for a `aws::RequestTag` condition they are checked with a logical OR
@@ -198,8 +199,11 @@ For the conditions to pass and the role assumption to be approved, the OIDC toke
                 "sts:TagSession"
             ],
             "Condition": {
+                "StringLike": {
+                    "agent.buildkite.com:sub": "organization:ORG_SLUG:pipeline:PIPELINE_SLUG:ref:main:*"
+                },
                 "StringEquals": {
-                    "agent.buildkite.com:aud": "sts.amazonaws.com"
+                    "agent.buildkite.com:aud": "sts.amazonaws.com",
                     "aws:RequestTag/organization_slug": "ORG_SLUG",
                     "aws:RequestTag/pipeline_slug": "PIPELINE_SLUG",
                     "aws:RequestTag/build_branch": [
