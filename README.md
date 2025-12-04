@@ -52,10 +52,7 @@ Defaults to `3600` (via the AWS CLI).
 
 ### `session-tags` (optional, array)
 
-A list of [claims supported in Buildkite OIDC
-tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the
-returned OIDC tokens will have the requested claims duplicated into AWS Session
-Tokens. These can then be checked in Conditions on the IAM Role Trist Policy.
+A list of [claims supported in Buildkite OIDC tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the returned OIDC tokens will have the requested claims duplicated into AWS Session Tokens. These can then be checked in Conditions on the IAM Role Trust Policy.
 
 Eg.
 
