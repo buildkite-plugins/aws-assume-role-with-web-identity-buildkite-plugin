@@ -23,11 +23,15 @@ assume_role_cmd=(aws sts assume-role-with-web-identity
   --role-arn "$role_arn"
   --role-session-name "$session_name")
 
-# optionally add the session duration to Buildkite and AWS commands
+# optionally add the session duration to the AWS command
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
   ttl_seconds=$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION")
-  request_token_cmd+=(--lifetime "$ttl_seconds")
   assume_role_cmd+=(--duration-seconds "$ttl_seconds")
+fi
+
+# optionally set the OIDC token lifetime
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" ]]; then
+  request_token_cmd+=(--lifetime "$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME")")
 fi
 
 # If the user has provided a specific set of claims to include in the token as AWS session tags, we'll request them

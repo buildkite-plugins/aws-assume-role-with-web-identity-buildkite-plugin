@@ -16,6 +16,8 @@ configuration:
       type: string
     role-session-duration:
       type: integer
+    oidc-token-lifetime:
+      type: integer
     region:
       type: string
     session-tags:
