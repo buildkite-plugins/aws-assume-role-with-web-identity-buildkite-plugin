@@ -43,13 +43,35 @@ buildkite_oidc_token=$("${request_token_cmd[@]}")
 echo "~~~ :aws: Assuming role using OIDC token"
 echo "Role ARN: ${role_arn}"
 assume_role_cmd+=(--web-identity-token "$buildkite_oidc_token")
-assume_role_response=$("${assume_role_cmd[@]}")
-assume_role_cmd_status=$?
 
-if [[ ${assume_role_cmd_status} -ne 0 ]]; then
+# Capture stderr separately so it doesn't pollute the JSON response on success
+assume_role_stderr=$(mktemp)
+assume_role_response=$("${assume_role_cmd[@]}" 2>"$assume_role_stderr") || assume_role_cmd_status=$?
+assume_role_err=$(<"$assume_role_stderr")
+rm -f "$assume_role_stderr"
+
+if [[ ${assume_role_cmd_status:-0} -ne 0 ]]; then
   echo "^^^ +++"
-  echo "Failed to assume AWS role:"
-  echo "${assume_role_response}"
+  echo "Failed to assume role: ${role_arn}"
+  echo ""
+  echo "${assume_role_err}"
+  echo ""
+
+  # Decode the OIDC JWT to show the sub claim for debugging
+  if [[ -n "${buildkite_oidc_token:-}" ]]; then
+    token_payload=$(decode_jwt_payload "$buildkite_oidc_token" 2>/dev/null || true)
+    token_sub=$(jq -r '.sub // empty' <<< "$token_payload" 2>/dev/null || true)
+    if [[ -n "$token_sub" ]]; then
+      token_ref=$(echo "$token_sub" | sed -n 's/.*ref:\(refs\/[^:]*\).*/\1/p' || true)
+      echo "Token claims:"
+      echo "  sub: ${token_sub}"
+      if [[ -n "$token_ref" ]]; then
+        echo "  ref: ${token_ref}"
+      fi
+      echo ""
+    fi
+  fi
+
   exit 1
 fi
 
