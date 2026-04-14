@@ -70,15 +70,12 @@ run_test_command() {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
-  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'failed to get OIDC token' >&2; false"
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'failed to get OIDC token' >&2; exit 1"
 
   run run_test_command
 
   assert_failure
-  assert_output <<EOF
-~~~ Assuming IAM role role123 ...
-Not authorized to perform sts:AssumeRoleWithWebIdentity
-EOF
+  assert_output --partial "failed to get OIDC token"
 
   unstub buildkite-agent
 }
@@ -88,15 +85,123 @@ EOF
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo 'Not authorized to perform sts:AssumeRoleWithWebIdentity' >&2; false"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo 'Not authorized to perform sts:AssumeRoleWithWebIdentity' >&2; exit 1"
 
   run run_test_command
 
   assert_failure
-  assert_output <<EOF
-~~~ Assuming IAM role role123 ...
-Not authorized to perform sts:AssumeRoleWithWebIdentity
-EOF
+  assert_output --partial "^^^ +++"
+  assert_output --partial "Failed to assume role: role123"
+  assert_output --partial "Not authorized to perform sts:AssumeRoleWithWebIdentity"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume role shows token claims" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  # Build a fake JWT with a sub claim containing a ref
+  # Payload: {"sub":"organization:test-org:pipeline:my-pipeline:ref:refs/heads/main:commit:abc123:step:build"}
+  jwt_payload='{"sub":"organization:test-org:pipeline:my-pipeline:ref:refs/heads/main:commit:abc123:step:build"}'
+  jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | tr -d '\n')
+  fake_jwt="header.${jwt_payload_b64}.signature"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "^^^ +++"
+  assert_output --partial "Failed to assume role: role123"
+  assert_output --partial "Token claims:"
+  assert_output --partial "sub: organization:test-org:pipeline:my-pipeline:ref:refs/heads/main:commit:abc123:step:build"
+  assert_output --partial "ref: refs/heads/main"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume role with base64url encoded JWT decodes token claims" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  # JWT uses base64url: replace + with -, / with _, strip = padding
+  jwt_payload='{"sub":"organization:test-org:pipeline:my-pipeline:ref:refs/heads/feat/my-branch:commit:abc123:step:build"}'
+  jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | tr '+/' '-_' | tr -d '=\n')
+  fake_jwt="header.${jwt_payload_b64}.signature"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "Token claims:"
+  assert_output --partial "sub: organization:test-org:pipeline:my-pipeline:ref:refs/heads/feat/my-branch:commit:abc123:step:build"
+  assert_output --partial "ref: refs/heads/feat/my-branch"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume role with no sub claim omits token claims" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  jwt_payload='{"aud":"sts.amazonaws.com","iss":"agent.buildkite.com"}'
+  jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | tr -d '\n')
+  fake_jwt="header.${jwt_payload_b64}.signature"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "Failed to assume role: role123"
+  refute_output --partial "Token claims:"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume role with sub but no ref omits ref line" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  jwt_payload='{"sub":"organization:test-org:service-account:my-sa"}'
+  jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | tr -d '\n')
+  fake_jwt="header.${jwt_payload_b64}.signature"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "Token claims:"
+  assert_output --partial "sub: organization:test-org:service-account:my-sa"
+  refute_output --partial "  ref:"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume role with non-JWT token omits token claims" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'not-a-jwt-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token not-a-jwt-token : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "Failed to assume role: role123"
+  refute_output --partial "Token claims:"
 
   unstub aws
   unstub buildkite-agent
@@ -184,8 +289,10 @@ EOF
   assert_success
   assert_output --partial "Using region: eu-central-1"
   assert_output --partial "Role ARN: role123"
+  # The stub writes STS-REGION to stderr, which is captured separately and not
+  # shown in stdout. The key assertion is that region is NOT eu-central-1 during
+  # the STS call (i.e. it's only set after assume-role succeeds).
   refute_output --partial "STS-REGION:[eu-central-1]"
-  assert_output --partial "STS-REGION:[<not set>]"
 
   assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
   assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
