@@ -6,6 +6,7 @@ A [Buildkite plugin] to [assume-role-with-web-identity] using a [Buildkite OIDC 
 [assume-role-with-web-identity]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html
 [assume-role-with-web-identity-options]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html#options
 [Buildkite OIDC token]: https://buildkite.com/docs/agent/v3/cli-oidc
+[buildkite-agent-oidc-options]: https://buildkite.com/docs/agent/cli/reference/oidc#request-oidc-token-options
 
 > [!IMPORTANT]
 > You will need to configure an appropriate [OIDC identity
@@ -49,6 +50,10 @@ Defaults to `buildkite-job-${BUILDKITE_JOB_ID}`.
 An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
 
 Defaults to `3600` (via the AWS CLI).
+
+### `oidc-token-lifetime` (optional, integer)
+
+An integer number of seconds that the buildkite oidc token should last. Passed as the value of the [`lifetime`][buildkite-agent-oidc-options]  parameter in the OIDC request.
 
 ### `session-tags` (optional, array)
 
