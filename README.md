@@ -55,6 +55,8 @@ Defaults to `3600` (via the AWS CLI).
 
 An integer number of seconds that the buildkite oidc token should last. Passed as the value of the [`lifetime`][buildkite-agent-oidc-options]  parameter in the OIDC request.
 
+Defaults to `300` (via the BUILDKITE AGENT unless `role-session-duration` is set).
+
 ### `session-tags` (optional, array)
 
 A list of [claims supported in Buildkite OIDC tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the returned OIDC tokens will have the requested claims duplicated into AWS Session Tokens. These can then be checked in Conditions on the IAM Role Trust Policy.
