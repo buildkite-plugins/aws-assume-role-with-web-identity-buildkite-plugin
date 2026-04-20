@@ -49,13 +49,16 @@ Defaults to `buildkite-job-${BUILDKITE_JOB_ID}`.
 
 An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
 
-Defaults to `3600` (via the AWS CLI).
+An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
+
+Defaults to `3600` (via the AWS CLI). When `oidc-token-lifetime` is not set, this value is also used as the OIDC token lifetime, capped at `7200` (2 hours), the maximum enforced by Buildkite.
 
 ### `oidc-token-lifetime` (optional, integer)
 
 An integer number of seconds that the buildkite oidc token should last. Passed as the value of the [`lifetime`][buildkite-agent-oidc-options]  parameter in the OIDC request.
 
-Defaults to `300` (via the BUILDKITE AGENT unless `role-session-duration` is set).
+Defaults to `300` (via the BUILDKITE AGENT) unless `role-session-duration` is set, in which case it defaults to whichever is smaller: `role-session-duration` or `7200`.
+Note: Buildkite enforces a maximum OIDC token lifetime of `7200` (2 hours) — values above this will be rejected.
 
 ### `session-tags` (optional, array)
 
