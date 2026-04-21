@@ -4,6 +4,9 @@ set -euo pipefail
 
 DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)"
 
+# default maximum oidc token lifetime in seconds https://buildkite.com/docs/platform/limits
+DEFAULT_MAX_OIDC_TOKEN_LIFETIME=7200
+
 # shellcheck source=lib/shared.bash
 . "$DIR/shared.bash"
 
@@ -23,11 +26,23 @@ assume_role_cmd=(aws sts assume-role-with-web-identity
   --role-arn "$role_arn"
   --role-session-name "$session_name")
 
-# optionally add the session duration to Buildkite and AWS commands
+# optionally add the session duration to the AWS command
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
   ttl_seconds=$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION")
-  request_token_cmd+=(--lifetime "$ttl_seconds")
   assume_role_cmd+=(--duration-seconds "$ttl_seconds")
+fi
+
+# optionally set the OIDC token lifetime
+# if unset, and session duration is set, use the session duration if it's less than the default maximum
+if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" && -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
+  if [[ "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}" -gt "${DEFAULT_MAX_OIDC_TOKEN_LIFETIME}" ]]; then
+    BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="${DEFAULT_MAX_OIDC_TOKEN_LIFETIME}"
+  else
+    BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION}"
+  fi
+fi
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" ]]; then
+  request_token_cmd+=(--lifetime "$(printf "%d" "$BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME")")
 fi
 
 # If the user has provided a specific set of claims to include in the token as AWS session tags, we'll request them

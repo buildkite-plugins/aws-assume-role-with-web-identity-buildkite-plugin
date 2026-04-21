@@ -207,12 +207,79 @@ run_test_command() {
   unstub buildkite-agent
 }
 
-@test "calls aws sts with custom duration" {
+@test "calls aws sts with custom oidc token lifetime" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="300"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 300 : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "calls aws sts with custom duration and custom oidc token lifetime" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="43200"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="7201"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 7201 : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "calls aws sts with custom duration less than maximum default oidc lifetime" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="6800"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 6800 : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 6800 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "calls aws sts with custom duration greater than default maximum oidc lifetime" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="43200"
 
-  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 43200 : echo 'buildkite-oidc-token'"
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 7200 : echo 'buildkite-oidc-token'"
   stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
