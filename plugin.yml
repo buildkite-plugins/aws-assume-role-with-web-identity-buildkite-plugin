@@ -22,6 +22,10 @@ configuration:
       type: string
     session-tags:
       type: array
+    chain-role-arn:
+      type: string
+    chain-role-session-duration:
+      type: integer
   required:
     - role-arn
   additionalProperties: false

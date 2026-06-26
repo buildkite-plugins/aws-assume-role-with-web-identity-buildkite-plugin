@@ -394,6 +394,103 @@ run_test_command() {
   unstub buildkite-agent
 }
 
+@test "chains a second role assumption when chain-role-arn is set" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Role ARN: role123"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+  assert_output --partial "Role ARN: chain-role456"
+  assert_output --partial "Assumed chained role: chain-assumed-role-id-value"
+
+  # Final credentials should be those from the chained role
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=chain-access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=chain-secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=chain-session-token-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "chains a second role assumption with custom session duration" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_SESSION_DURATION="7200"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 7200 : cat tests/chain-sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Assumed chained role: chain-assumed-role-id-value"
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=chain-access-key-id-value"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "failure to assume chained role exits with error" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : echo 'AccessDenied' >&2; exit 1"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "^^^ +++"
+  assert_output --partial "Failed to assume chained role: chain-role456"
+  assert_output --partial "AccessDenied"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "chains a second role assumption and respects credential name prefix" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX="MY_PREFIX_"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Assumed chained role: chain-assumed-role-id-value"
+
+  # Final prefixed credentials should be from the chained role
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_ACCESS_KEY_ID=chain-access-key-id-value"
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_SECRET_ACCESS_KEY=chain-secret-access-key-value"
+  assert_output --partial "TESTRESULT:MY_PREFIX_AWS_SESSION_TOKEN=chain-session-token-value"
+
+  # Standard vars should remain unset
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=<value not set>"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
 @test "uses credential name prefix when specified" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"

@@ -115,3 +115,54 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; th
   export AWS_REGION="${AWS_DEFAULT_REGION}"
   echo "Using region: ${AWS_REGION}"
 fi
+
+# Optionally chain a second role assumption (sts:AssumeRole using credentials from the first hop)
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
+  chain_role_arn="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+  chain_session_name="buildkite-job-${BUILDKITE_JOB_ID}"
+
+  chain_role_cmd=(aws sts assume-role
+    --role-arn "${chain_role_arn}"
+    --role-session-name "${chain_session_name}")
+
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_SESSION_DURATION:-}" ]]; then
+    chain_role_cmd+=(--duration-seconds "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_SESSION_DURATION}")
+  fi
+
+  echo "~~~ :aws: Chaining role assumption"
+  echo "Role ARN: ${chain_role_arn}"
+
+  # Pass credentials explicitly so the chain hop works even when credential-name-prefix is set
+  chain_role_stderr=$(mktemp)
+  chain_role_response=$(
+    AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
+    AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
+    AWS_SESSION_TOKEN="${SESSION_TOKEN}" \
+    "${chain_role_cmd[@]}" 2>"$chain_role_stderr"
+  ) || chain_role_cmd_status=$?
+  chain_role_err=$(<"$chain_role_stderr")
+  rm -f "$chain_role_stderr"
+
+  if [[ ${chain_role_cmd_status:-0} -ne 0 ]]; then
+    echo "^^^ +++"
+    echo "Failed to assume chained role: ${chain_role_arn}"
+    echo ""
+    echo "${chain_role_err}"
+    exit 1
+  fi
+
+  chain_credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${chain_role_response}")
+  read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${chain_credentials}"
+
+  if [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
+    export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+    export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+    export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=${SESSION_TOKEN}"
+  else
+    export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+    export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+    export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
+  fi
+
+  echo "Assumed chained role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${chain_role_response}")"
+fi

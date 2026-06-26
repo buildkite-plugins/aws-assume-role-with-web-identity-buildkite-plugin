@@ -1,0 +1,11 @@
+{
+  "Credentials": {
+    "SecretAccessKey": "chain-secret-access-key-value",
+    "SessionToken": "chain-session-token-value",
+    "Expiration": "...",
+    "AccessKeyId": "chain-access-key-id-value"
+  },
+  "AssumedRoleUser": {
+    "AssumedRoleId": "chain-assumed-role-id-value"
+  }
+}

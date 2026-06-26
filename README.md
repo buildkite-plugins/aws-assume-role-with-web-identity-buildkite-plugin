@@ -99,6 +99,29 @@ plugins:
       credential-name-prefix:MY_PREFIX_
 ```
 
+### `chain-role-arn` (optional, string)
+
+ARN of a second IAM role to assume after the initial OIDC-based role assumption. Useful for multi-account setups where the OIDC provider only exists in one account (e.g. an Identity Account), but the target resources live in another account.
+
+The typical pattern is: Buildkite OIDC → entry role in Identity Account → `sts:AssumeRole` into Target Account.
+
+```yaml
+plugins:
+  - aws-assume-role-with-web-identity#v1.6.0:
+      role-arn: arn:aws:iam::IDENTITY-ACCOUNT-ID:role/CI-ENTRY-ROLE
+      chain-role-arn: arn:aws:iam::TARGET-ACCOUNT-ID:role/TARGET-ROLE
+```
+
+The chained `sts:AssumeRole` call uses the credentials obtained from the first hop, so the entry role must have `sts:AssumeRole` permission on the target role. The final exported credentials will be those of the chained role.
+
+When `credential-name-prefix` is also set, the chained credentials are exported under the same prefix.
+
+### `chain-role-session-duration` (optional, integer)
+
+An integer number of seconds for the chained role session. Passed as `--duration-seconds` to `sts:AssumeRole`. Defaults to `3600` (via the AWS CLI) when not set.
+
+Only used when `chain-role-arn` is also set.
+
 ### `hook` (optional, string)
 
 The hook to run. Can be either `environment` (the default) or `pre-command`.
