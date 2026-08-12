@@ -75,8 +75,83 @@ run_test_command() {
   run run_test_command
 
   assert_failure
+  # Without the expansion marker the error stays hidden in the collapsed group
+  assert_output --partial "^^^ +++"
+  assert_output --partial "Failed to request an OIDC token from Buildkite (audience: sts.amazonaws.com)"
   assert_output --partial "failed to get OIDC token"
+  assert_output --partial "job job-uuid-42"
 
+  unstub buildkite-agent
+}
+
+@test "empty OIDC token is rejected before calling sts" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  # Exits 0 but prints nothing; aws must not be called with an empty token
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : true"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "^^^ +++"
+  assert_output --partial "Buildkite returned an empty OIDC token for audience sts.amazonaws.com"
+  assert_output --partial "Job: job-uuid-42"
+  refute_output --partial "Role ARN: role123"
+
+  unstub buildkite-agent
+}
+
+@test "agent stderr is preserved when the token request eventually succeeds" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'warn: 503 (attempt 2/5)' >&2; echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "warn: 503 (attempt 2/5)"
+  assert_output --partial "Assumed role: assumed-role-id-value"
+  refute_output --partial "^^^ +++"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "sts response without Credentials fails instead of exporting null" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '{\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "^^^ +++"
+  assert_output --partial "sts assume-role-with-web-identity returned an unexpected response (no Credentials)"
+  refute_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=null"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "non-JSON sts response fails instead of exporting null" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '<html><body>502 Bad Gateway</body></html>'"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "^^^ +++"
+  assert_output --partial "sts assume-role-with-web-identity returned an unexpected response (no Credentials)"
+
+  unstub aws
   unstub buildkite-agent
 }
 

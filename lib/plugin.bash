@@ -53,7 +53,37 @@ if plugin_read_list_into_result BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTI
 fi
 
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
-buildkite_oidc_token=$("${request_token_cmd[@]}")
+
+# Capture stderr separately so a failure can be reported after "^^^ +++";
+# without that marker the error stays hidden inside this collapsed group.
+oidc_stderr=$(mktemp)
+buildkite_oidc_token=$("${request_token_cmd[@]}" 2>"$oidc_stderr") || oidc_cmd_status=$?
+oidc_err=$(<"$oidc_stderr")
+rm -f "$oidc_stderr"
+
+if [[ ${oidc_cmd_status:-0} -ne 0 ]]; then
+  echo "^^^ +++"
+  echo "Failed to request an OIDC token from Buildkite (audience: sts.amazonaws.com)"
+  echo ""
+  echo "${oidc_err}"
+  echo ""
+  echo "The agent makes up to 5 attempts internally for 429, 5xx, and transient"
+  echo "network errors, so a failure here is usually non-retryable."
+  echo "'failed to decode JSON response' means the endpoint returned a 2xx with a"
+  echo "non-JSON body - retry, and if it persists raise it with Buildkite support"
+  echo "quoting job ${BUILDKITE_JOB_ID:-unknown}."
+  exit 1
+elif [[ -n "$oidc_err" ]]; then
+  # Retry warnings on an eventually-successful request are worth keeping
+  echo "${oidc_err}"
+fi
+
+if [[ -z "$buildkite_oidc_token" ]]; then
+  echo "^^^ +++"
+  echo "Buildkite returned an empty OIDC token for audience sts.amazonaws.com"
+  echo "Job: ${BUILDKITE_JOB_ID:-unknown}"
+  exit 1
+fi
 
 echo "~~~ :aws: Assuming role using OIDC token"
 echo "Role ARN: ${role_arn}"
@@ -92,6 +122,16 @@ fi
 
 # Use default empty prefix if not set
 CREDENTIAL_NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}"
+
+# jq emits "null null null" at exit 0 when .Credentials is absent, which would
+# otherwise export the literal string "null" as the credentials. A non-JSON body
+# makes jq exit non-zero, so this covers both.
+if ! jq -e '.Credentials.AccessKeyId // empty' <<< "${assume_role_response}" >/dev/null 2>&1; then
+  echo "^^^ +++"
+  echo "sts assume-role-with-web-identity returned an unexpected response (no Credentials)"
+  echo "Role ARN: ${role_arn}"
+  exit 1
+fi
 
 # Parse credentials once
 credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${assume_role_response}")
