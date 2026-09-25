@@ -37,6 +37,12 @@ This will call `buildkite-agent oidc request-token --audience sts.amazonaws.com`
 
 ARN of the IAM role this plugin should assume.
 
+### `audience` (optional, string)
+
+The audience (`aud` claim) requested in the Buildkite OIDC token. Passed as the value of the [`--audience`][buildkite-agent-oidc-options] parameter in the OIDC request.
+
+Defaults to `sts.amazonaws.com`. Set a custom value when a role's trust policy should require a specific audience — e.g. to scope a sensitive role so that a token minted for one role cannot be used to assume another (audience restriction). Note that the OIDC identity provider's _Audience_ list must include any custom value used.
+
 ### `role-session-name` (optional, string)
 
 The value of the [`role-session-name`][assume-role-with-web-identity-options] to pass with the STS request. This value can be [referred to in assume-role policy][sts-role-session-name], and will be recorded in Cloudtrail.

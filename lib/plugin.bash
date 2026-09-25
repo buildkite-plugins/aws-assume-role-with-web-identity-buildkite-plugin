@@ -17,9 +17,10 @@ fi
 
 role_arn="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}"
 session_name="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME:-buildkite-job-${BUILDKITE_JOB_ID}}"
+audience="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE:-sts.amazonaws.com}"
 
 # prepare Buildkite command; optional args to be added before executing
-request_token_cmd=(buildkite-agent oidc request-token --audience sts.amazonaws.com)
+request_token_cmd=(buildkite-agent oidc request-token --audience "${audience}")
 
 # prepare AWS command; OIDC token and optional args to be added before executing
 assume_role_cmd=(aws sts assume-role-with-web-identity
@@ -63,7 +64,7 @@ rm -f "$oidc_stderr"
 
 if [[ ${oidc_cmd_status:-0} -ne 0 ]]; then
   echo "^^^ +++"
-  echo "Failed to request an OIDC token from Buildkite (audience: sts.amazonaws.com)"
+  echo "Failed to request an OIDC token from Buildkite (audience: ${audience})"
   echo ""
   echo "${oidc_err}"
   echo ""
@@ -80,7 +81,7 @@ fi
 
 if [[ -z "$buildkite_oidc_token" ]]; then
   echo "^^^ +++"
-  echo "Buildkite returned an empty OIDC token for audience sts.amazonaws.com"
+  echo "Buildkite returned an empty OIDC token for audience ${audience}"
   echo "Job: ${BUILDKITE_JOB_ID:-unknown}"
   exit 1
 fi
