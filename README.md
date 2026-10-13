@@ -100,6 +100,7 @@ For example, by setting `credential-name-prefix: MY_PREFIX_` the plugin will exp
 ```yaml
 plugins:
   - aws-assume-role-with-web-identity#v1.8.0:
+      role-arn: arn:aws:iam::111111111111:role/example-role
       credential-name-prefix: MY_PREFIX_
 ```
 
