@@ -183,6 +183,7 @@ Optional claims, such as `cluster_id` and `cluster_name`, are only included in t
 ```yaml
 steps:
   - label: ":aws: assume role with OIDC claim conditions"
+    command: aws sts get-caller-identity
     env:
       BUILDKITE_OIDC_TOKEN_CLAIMS: cluster_id
     plugins:
