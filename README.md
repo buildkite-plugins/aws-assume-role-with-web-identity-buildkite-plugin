@@ -174,7 +174,23 @@ The following trust policy on the IAM role will permit a Buildkite job to assume
 * The `organization_slug` and `pipeline_slug` conditions are optional, and make it easier to see which organization and pipeline the policy applies to. If you include them, renaming the organization or pipeline causes role assumption to fail until you update the policy.
 * For restricting access to a set of IP addresses, see [Step 2](https://buildkite.com/docs/pipelines/security/oidc/aws#step-2-create-a-new-or-update-an-existing-iam-role-to-use-with-your-pipelines) of OIDC with AWS.
 * For a complete list of supported condition keys, see [Restricting access with Buildkite OIDC claims](https://buildkite.com/docs/pipelines/security/oidc/aws#restricting-access-with-buildkite-oidc-claims).
-* The `cluster_id` and `cluster_name` condition keys require [optional claims](https://buildkite.com/docs/agent/cli/reference/oidc#claims-optional-claims) that this plugin doesn't request, so trust policies using them will deny role assumption through this plugin.
+* The `cluster_id` and `cluster_name` condition keys require [optional claims](https://buildkite.com/docs/agent/cli/reference/oidc#claims-optional-claims). See [Optional claims](#optional-claims).
+
+### Optional claims
+
+Optional claims, such as `cluster_id` and `cluster_name`, are only included in the OIDC token when requested. To request them, set the `BUILDKITE_OIDC_TOKEN_CLAIMS` environment variable on the step. The `buildkite-agent oidc request-token` command that this plugin runs reads this variable as its `--claim` option. Separate multiple claims with commas.
+
+```yaml
+steps:
+  - label: ":aws: assume role with OIDC claim conditions"
+    env:
+      BUILDKITE_OIDC_TOKEN_CLAIMS: cluster_id
+    plugins:
+      - aws-assume-role-with-web-identity#v1.8.0:
+          role-arn: arn:aws:iam::123456789123:role/placeholder-role
+```
+
+Without these claims in the token, trust policies using `agent.buildkite.com:cluster_id` or `agent.buildkite.com:cluster_name` conditions will deny role assumption.
 
 ### Session tags
 
