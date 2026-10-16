@@ -5,7 +5,7 @@ A [Buildkite plugin] to [assume-role-with-web-identity] using a [Buildkite OIDC 
 [Buildkite plugin]: https://buildkite.com/docs/plugins
 [assume-role-with-web-identity]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html
 [assume-role-with-web-identity-options]: https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/assume-role-with-web-identity.html#options
-[Buildkite OIDC token]: https://buildkite.com/docs/agent/v3/cli-oidc
+[Buildkite OIDC token]: https://buildkite.com/docs/agent/cli/reference/oidc
 [buildkite-agent-oidc-options]: https://buildkite.com/docs/agent/cli/reference/oidc#request-oidc-token-options
 
 > [!IMPORTANT]
@@ -55,8 +55,6 @@ Defaults to `buildkite-job-${BUILDKITE_JOB_ID}`.
 
 An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
 
-An integer number of seconds that the assumed role session should last. Passed as the value of the [`duration-seconds`][assume-role-with-web-identity-options]  parameter in the STS request.
-
 Defaults to `3600` (via the AWS CLI). When `oidc-token-lifetime` is not set, this value is also used as the OIDC token lifetime, capped at `7200` (2 hours), the maximum enforced by Buildkite.
 
 ### `oidc-token-lifetime` (optional, integer)
@@ -68,7 +66,7 @@ Note: Buildkite enforces a maximum OIDC token lifetime of `7200` (2 hours) — v
 
 ### `session-tags` (optional, array)
 
-A list of [claims supported in Buildkite OIDC tokens](https://buildkite.com/docs/agent/v3/cli-oidc). When provided, the returned OIDC tokens will have the requested claims duplicated into AWS Session Tokens. These can then be checked in Conditions on the IAM Role Trust Policy.
+A list of [Buildkite OIDC claims](https://buildkite.com/docs/agent/cli/reference/oidc#claims) to also pass to AWS as session tags. Session tags are available in the role session as `aws:PrincipalTag/<claim>` condition keys which are useful for attribute-based access control, and are recorded in AWS CloudTrail. You don't need session tags to restrict which pipelines can assume a role. Using session tags requires `sts:TagSession` in the role's trust policy. See [Using AWS session tags](https://buildkite.com/docs/pipelines/security/oidc/aws#using-aws-session-tags) for details.
 
 Eg.
 
@@ -97,12 +95,13 @@ versions.
 
 The plugin supports a `credential-name-prefix` option to prefix the default AWS credential names with a specific string. This is useful when you have multiple AWS credentials in your environment and you want to avoid conflicts.
 
-For example, by setting `credential-name-prefix:MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
+For example, by setting `credential-name-prefix: MY_PREFIX_` the plugin will export `MY_PREFIX_AWS_ACCESS_KEY_ID`, `MY_PREFIX_AWS_SECRET_ACCESS_KEY` and `MY_PREFIX_AWS_SESSION_TOKEN` instead of the default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`.
 
 ```yaml
 plugins:
   - aws-assume-role-with-web-identity#v1.8.0:
-      credential-name-prefix:MY_PREFIX_
+      role-arn: arn:aws:iam::111111111111:role/example-role
+      credential-name-prefix: MY_PREFIX_
 ```
 
 ### `hook` (optional, string)
@@ -112,22 +111,20 @@ The hook to run. Can be either `environment` (the default) or `pre-command`.
 Useful for when using a plugin such as the `artifacts` plugin that runs as a
 `pre-command` hook, and you need that to run with the pipeline role before then
 assuming your IAM role like so:
-```
+```yaml
     plugins:
       - artifacts#v1.9.4:
           download: "out/*"
-      - aws-assume-role-with-web-identity#v1.8.0
+      - aws-assume-role-with-web-identity#v1.8.0:
           hook: pre-command
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
 
 ## IAM Role Trust Policies
 
-There are two main options for defining which Buildkite OIDC tokens are permitted to assume an IAM Role.
+AWS reads a subset of the Buildkite OIDC claims directly from the token, so a role's trust policy can restrict which Buildkite organizations and pipelines can assume it using `agent.buildkite.com:<claim>` condition keys. See [OIDC with AWS](https://buildkite.com/docs/pipelines/security/oidc/aws) in the Buildkite docs for a full walkthrough.
 
-### Without Session Tags
-
-This is the default behaviour of this plugin. Given a Buildkite pipeline step like so:
+For example, given a Buildkite pipeline step like so:
 
 ```yaml
 steps:
@@ -136,12 +133,8 @@ steps:
       - aws-assume-role-with-web-identity#v1.8.0:
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
-The following trust policy on the IAM role will permit a Buildkite Job to assume the role if:
 
-* The organization slug is `ORG_SLUG`
-* The pipeline slug is `PIPELINE_SLUG`
-* The build is for the `main` branch
-* The agent is using either of the two provided IP addresses
+The following trust policy on the IAM role will permit a Buildkite job to assume the role if the job belongs to the organization `ORG_SLUG` with the UUID `ORG_ID`, and the pipeline `PIPELINE_SLUG` with the UUID `PIPELINE_ID`:
 
 ```json
 {
@@ -154,81 +147,15 @@ The following trust policy on the IAM role will permit a Buildkite Job to assume
             },
             "Action": "sts:AssumeRoleWithWebIdentity",
             "Condition": {
-                "StringEquals": {
-                    "agent.buildkite.com:aud": "sts.amazonaws.com"
-                },
                 "StringLike": {
-                    "agent.buildkite.com:sub": "organization:ORG_SLUG:pipeline:PIPELINE_SLUG:ref:main:*"
-                },
-                "IpAddress": {
-                    "aws:SourceIp": [
-                        "AGENT_PUBLIC_IP_ONE",
-                        "AGENT_PUBLIC_IP_TWO"
-                    ]
-                }
-
-            }
-        }
-    ]
-}
-```
-
-### With Session Tags
-
-Alternatively, the Buildkite pipeline step can include the `session-tags` option:
-
-```yaml
-steps:
-  - command: aws sts get-caller-identity
-    plugins:
-      - aws-assume-role-with-web-identity#v1.8.0:
-          role-arn: arn:aws:iam::111111111111:role/example-role
-          session-tags:
-          - organization_slug
-          - pipeline_slug
-          - build_branch
-```
-
-This means the trust policy on the IAM role can implement the same conditions, but minimise reliance on the overloaded `sub` claim. Note that [AWS requires the `agent.buildkite.com:sub` claim](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc_secure-by-default.html) to be specified in cases where an IAM role's trust policy uses federation with Buildkite OIDC.
-
-For the conditions to pass and the role assumption to be approved, the OIDC token must:
-
-* Must match all 6 conditions (`agent.buildkite.com:sub`, `agent.buildkite.com:aud`, `aws:RequestTag/organization_slug`, `aws:RequestTag/pipeline_slug`
-  `aws:RequestTag/build_branch` and `aws:SourceIp`). That is, they are checked with a logical AND
-* Can match `aws:RequestTag/build_branch` with either `main` or `production`. When multiple values are
-  provided for a `aws::RequestTag` condition they are checked with a logical OR
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Federated": "arn:aws:iam::111111111111:oidc-provider/agent.buildkite.com"
-            },
-            "Action": [
-                "sts:AssumeRoleWithWebIdentity",
-                "sts:TagSession"
-            ],
-            "Condition": {
-                "StringLike": {
-                    "agent.buildkite.com:sub": "organization:ORG_SLUG:pipeline:PIPELINE_SLUG:ref:main:*"
+                    "agent.buildkite.com:sub": "organization:ORG_SLUG:pipeline:PIPELINE_SLUG:*"
                 },
                 "StringEquals": {
                     "agent.buildkite.com:aud": "sts.amazonaws.com",
-                    "aws:RequestTag/organization_slug": "ORG_SLUG",
-                    "aws:RequestTag/pipeline_slug": "PIPELINE_SLUG",
-                    "aws:RequestTag/build_branch": [
-                      "main",
-                      "production"
-                    ]
-                },
-                "IpAddress": {
-                    "aws:SourceIp": [
-                        "AGENT_PUBLIC_IP_ONE",
-                        "AGENT_PUBLIC_IP_TWO"
-                    ]
+                    "agent.buildkite.com:organization_slug": "ORG_SLUG",
+                    "agent.buildkite.com:organization_id": "ORG_ID",
+                    "agent.buildkite.com:pipeline_slug": "PIPELINE_SLUG",
+                    "agent.buildkite.com:pipeline_id": "PIPELINE_ID"
                 }
             }
         }
@@ -236,23 +163,39 @@ For the conditions to pass and the role assumption to be approved, the OIDC toke
 }
 ```
 
-A useful pattern with `session-tags` is to request the `organization_id` and `pipeline_id` claims. These values
-are UUIDs that will never change, so they:
+* [AWS requires a condition on `agent.buildkite.com:sub`](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc_secure-by-default.html) in every trust policy for a Buildkite OIDC provider.
+* All conditions must match. To allow more than one value for a condition, list the values in an array, and any one of them can match. For example, this condition allows builds on either the `main` or `production` branch:
 
-* will continue to work even if an organization or pipeline is renamed
-* mitigate any risk of being reused by different organizations or pipelines in
-  the future, should the intended organization or pipeline be deleted
+  ```json
+  "agent.buildkite.com:build_branch": ["main", "production"]
+  ```
+
+* The `organization_id` and `pipeline_id` UUIDs never change and can't be reused by another organization or pipeline.
+* The `organization_slug` and `pipeline_slug` conditions are optional, and make it easier to see which organization and pipeline the policy applies to. If you include them, renaming the organization or pipeline causes role assumption to fail until you update the policy.
+* For restricting access to a set of IP addresses, see [Step 2](https://buildkite.com/docs/pipelines/security/oidc/aws#step-2-create-a-new-or-update-an-existing-iam-role-to-use-with-your-pipelines) of OIDC with AWS.
+* For a complete list of supported condition keys, see [Restricting access with Buildkite OIDC claims](https://buildkite.com/docs/pipelines/security/oidc/aws#restricting-access-with-buildkite-oidc-claims).
+* The `cluster_id` and `cluster_name` condition keys require [optional claims](https://buildkite.com/docs/agent/cli/reference/oidc#claims-optional-claims). See [Optional claims](#optional-claims).
+
+### Optional claims
+
+Optional claims, such as `cluster_id` and `cluster_name`, are only included in the OIDC token when requested. To request them, set the `BUILDKITE_OIDC_TOKEN_CLAIMS` environment variable on the step. The `buildkite-agent oidc request-token` command that this plugin runs reads this variable as its `--claim` option. Separate multiple claims with commas.
 
 ```yaml
 steps:
-  - command: aws sts get-caller-identity
+  - label: ":aws: assume role with OIDC claim conditions"
+    command: aws sts get-caller-identity
+    env:
+      BUILDKITE_OIDC_TOKEN_CLAIMS: cluster_id
     plugins:
       - aws-assume-role-with-web-identity#v1.8.0:
-          role-arn: arn:aws:iam::111111111111:role/example-role
-          session-tags:
-          - organization_id
-          - pipeline_id
+          role-arn: arn:aws:iam::123456789123:role/placeholder-role
 ```
+
+Without these claims in the token, trust policies using `agent.buildkite.com:cluster_id` or `agent.buildkite.com:cluster_name` conditions will deny role assumption.
+
+### Session tags
+
+You don't need [`session-tags`](#session-tags-optional-array) to restrict which pipelines can assume a role. Use them when you need claim values in the role session, for example, in `aws:PrincipalTag/<claim>` conditions for attribute-based access control, or in AWS CloudTrail records. The role's trust policy must also allow `sts:TagSession`. See [Using AWS session tags](https://buildkite.com/docs/pipelines/security/oidc/aws#using-aws-session-tags) for details.
 
 ## AWS configuration with Terraform
 
@@ -280,12 +223,12 @@ resource "aws_iam_openid_connect_provider" "buildkite-agent" {
 }
 ```
 
-The oidc request will set the audience and subject as follows:
-- Audience: `sts.amazonaws.com`
-- Subject: `organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:ref:<BRANCH_REF>:commit:<BUILD_COMMIT>:step:<STEP_ID>`
+By default, the OIDC token that this plugin requests has the following audience and subject, which the trust policy below matches:
+- Audience: `sts.amazonaws.com`, unless you set the plugin's [`audience`](#audience-optional-string) option
+- Subject: `organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:ref:<REF>:commit:<BUILD_COMMIT>:step:<STEP_KEY>`, where `<REF>` is a Git ref such as `refs/heads/main`
 
 In addition to the `aws_iam_openid_connect_provider` the role being assumed should have a trust policy that can be defined like so.
-Be sure to replace the <ORG_SLUG> and/or <PIPELINE_SLUG> placeholders.
+Be sure to replace the `<ORG_SLUG>`, `<ORG_ID>`, `<PIPELINE_SLUG>` and `<PIPELINE_ID>` placeholders.
 
 ```terraform
 data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
@@ -297,13 +240,11 @@ data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
       type        = "Federated"
       identifiers = [aws_iam_openid_connect_provider.buildkite-agent.arn]
     }
+
     condition {
-      test     = "ForAnyValue:StringLike"
+      test     = "StringLike"
       variable = "agent.buildkite.com:sub"
-      values   = [
-        "organization:<ORG_SLUG>:pipeline:*", # Example: Allow any pipeline in the organization access
-        "organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:*", # Example: Restrict access to a pipeline in the organization
-      ]
+      values   = ["organization:<ORG_SLUG>:pipeline:<PIPELINE_SLUG>:*"]
     }
 
     condition {
@@ -311,9 +252,34 @@ data "aws_iam_policy_document" "buildkite-oidc-assume-role-trust-policy" {
       variable = "agent.buildkite.com:aud"
       values   = ["sts.amazonaws.com"]
     }
+
+    condition {
+      test     = "StringEquals"
+      variable = "agent.buildkite.com:organization_slug"
+      values   = ["<ORG_SLUG>"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "agent.buildkite.com:organization_id"
+      values   = ["<ORG_ID>"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "agent.buildkite.com:pipeline_slug"
+      values   = ["<PIPELINE_SLUG>"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "agent.buildkite.com:pipeline_id"
+      values   = ["<PIPELINE_ID>"]
+    }
   }
 }
 ```
+
 
 ## Compatibility
 
