@@ -23,7 +23,10 @@ audience="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE:-sts.ama
 request_token_cmd=(buildkite-agent oidc request-token --audience "${audience}")
 
 # prepare AWS command; OIDC token and optional args to be added before executing
-assume_role_cmd=(aws sts assume-role-with-web-identity
+# AssumeRoleWithWebIdentity is not signed,
+# so --no-sign-request stops the CLI from loading credentials it would not use
+# (on EC2, a fetch from instance metadata)
+assume_role_cmd=(aws --no-sign-request sts assume-role-with-web-identity
   --role-arn "$role_arn"
   --role-session-name "$session_name")
 
