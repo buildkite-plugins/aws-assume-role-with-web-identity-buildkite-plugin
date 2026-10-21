@@ -6,6 +6,6 @@ services:
       - ".:/plugin:ro"
 
   tests:
-    image: buildkite/plugin-tester:v4.4.0
+    image: buildkite/plugin-tester:v5.0.0
     volumes:
       - ".:/plugin:ro"
