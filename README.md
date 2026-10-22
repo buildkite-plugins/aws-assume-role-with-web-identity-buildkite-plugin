@@ -25,7 +25,7 @@ Use the plugin in your steps like this:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.0:
+      - aws-assume-role-with-web-identity#v1.8.1:
           role-arn: arn:aws:iam::AWS-ACCOUNT-ID:role/SOME-ROLE
 ```
 
@@ -99,7 +99,7 @@ For example, by setting `credential-name-prefix: MY_PREFIX_` the plugin will exp
 
 ```yaml
 plugins:
-  - aws-assume-role-with-web-identity#v1.8.0:
+  - aws-assume-role-with-web-identity#v1.8.1:
       role-arn: arn:aws:iam::111111111111:role/example-role
       credential-name-prefix: MY_PREFIX_
 ```
@@ -115,7 +115,7 @@ assuming your IAM role like so:
     plugins:
       - artifacts#v1.9.4:
           download: "out/*"
-      - aws-assume-role-with-web-identity#v1.8.0:
+      - aws-assume-role-with-web-identity#v1.8.1:
           hook: pre-command
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
@@ -130,7 +130,7 @@ For example, given a Buildkite pipeline step like so:
 steps:
   - command: aws sts get-caller-identity
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.0:
+      - aws-assume-role-with-web-identity#v1.8.1:
           role-arn: arn:aws:iam::111111111111:role/example-role
 ```
 
@@ -187,7 +187,7 @@ steps:
     env:
       BUILDKITE_OIDC_TOKEN_CLAIMS: cluster_id
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.0:
+      - aws-assume-role-with-web-identity#v1.8.1:
           role-arn: arn:aws:iam::123456789123:role/placeholder-role
 ```
 
