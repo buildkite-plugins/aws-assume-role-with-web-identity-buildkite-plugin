@@ -139,7 +139,46 @@ fi
 
 # Parse credentials once
 credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${assume_role_response}")
+echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
 read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+
+# Optionally chain into a second role with sts:AssumeRole, using the first role's credentials
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
+  chain_role_arn="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+
+  echo "~~~ :aws: Assuming chained role"
+  echo "Role ARN: ${chain_role_arn}"
+
+  # Pass the credentials explicitly; they are not in AWS_* yet, and never are with credential-name-prefix
+  chain_role_stderr=$(mktemp)
+  chain_role_response=$(
+    AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
+    AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
+    AWS_SESSION_TOKEN="${SESSION_TOKEN}" \
+    aws sts assume-role --role-arn "$chain_role_arn" --role-session-name "$session_name" 2>"$chain_role_stderr"
+  ) || chain_role_cmd_status=$?
+  chain_role_err=$(<"$chain_role_stderr")
+  rm -f "$chain_role_stderr"
+
+  if [[ ${chain_role_cmd_status:-0} -ne 0 ]]; then
+    echo "^^^ +++"
+    echo "Failed to assume chained role: ${chain_role_arn}"
+    echo ""
+    echo "${chain_role_err}"
+    exit 1
+  fi
+
+  if ! jq -e '.Credentials.AccessKeyId // empty' <<< "${chain_role_response}" >/dev/null 2>&1; then
+    echo "^^^ +++"
+    echo "sts assume-role returned an unexpected response (no Credentials)"
+    echo "Role ARN: ${chain_role_arn}"
+    exit 1
+  fi
+
+  credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${chain_role_response}")
+  read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+  echo "Assumed chained role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${chain_role_response}")"
+fi
 
 # Export credentials with or without prefix
 if [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
@@ -151,8 +190,6 @@ else
   export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
   export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 fi
-
-echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
 
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
   export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"

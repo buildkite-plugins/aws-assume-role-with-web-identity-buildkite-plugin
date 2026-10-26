@@ -104,6 +104,30 @@ plugins:
       credential-name-prefix: MY_PREFIX_
 ```
 
+### `chain-role-arn` (optional, string)
+
+ARN of a second IAM role to assume after the initial OIDC-based role assumption. Useful for multi-account setups where the OIDC provider only exists in one account (e.g. an Identity Account), but the target resources live in another account.
+
+The typical pattern is: Buildkite OIDC → entry role in Identity Account → `sts:AssumeRole` into Target Account.
+
+```yaml
+plugins:
+  - aws-assume-role-with-web-identity#v1.8.1:
+      role-arn: arn:aws:iam::IDENTITY-ACCOUNT-ID:role/CI-ENTRY-ROLE
+      chain-role-arn: arn:aws:iam::TARGET-ACCOUNT-ID:role/TARGET-ROLE
+```
+
+The chained `sts:AssumeRole` call uses the credentials obtained from the first hop, so the entry role must have `sts:AssumeRole` permission on the target role. The chained session uses the same `role-session-name` as the first one. The final exported credentials will be those of the chained role.
+
+When `credential-name-prefix` is also set, the chained credentials are exported under the same prefix.
+
+AWS limits sessions obtained through role chaining to a maximum of one hour, even when `role-session-duration` is longer. Jobs that run for longer than that will hit expired credentials.
+
+The `agent.buildkite.com:*` trust policy conditions and `session-tags` only apply to the entry role. The target role can only trust the entry role, so any pipeline that can assume the entry role can chain into any role the entry role is allowed to assume. To keep this scoped:
+
+- Limit the entry role's `sts:AssumeRole` permission to the specific target role ARNs it needs.
+- Have each target role trust only the entry role.
+
 ### `hook` (optional, string)
 
 The hook to run. Can be either `environment` (the default) or `pre-command`.
