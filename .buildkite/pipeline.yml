@@ -1,13 +1,13 @@
 steps:  
   - label: ":shell: Tests"
     plugins:
-      - plugin-tester#v1.3.0:
+      - plugin-tester#v2.0.0:
           folders:
             - tests
 
   - label: ":sparkles: Lint"
     plugins:
-      - plugin-linter#v3.3.0:
+      - plugin-linter#v4.1.0:
           id: aws-assume-role-with-web-identity
 
   - label: ":shell: Shellcheck"
@@ -20,8 +20,8 @@ steps:
   - label: "Security Scan"
     key: security_scan
     plugins:
-      - secrets#v2.2.0:
+      - secrets#v2.6.0:
           variables:
             GITHUB_TOKEN: GITHUB_TOKEN
-      - ossf-scorecard#v1.0.1:
+      - ossf-scorecard#v1.1.0:
           github_token: $$GITHUB_TOKEN

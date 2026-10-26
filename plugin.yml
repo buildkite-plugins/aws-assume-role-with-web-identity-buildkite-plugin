@@ -6,6 +6,8 @@ requirements:
   - jq
 configuration:
   properties:
+    audience:
+      type: string
     credential-name-prefix:
       type: string
     hook:
@@ -24,8 +26,6 @@ configuration:
       type: array
     chain-role-arn:
       type: string
-    chain-role-session-duration:
-      type: integer
   required:
     - role-arn
   additionalProperties: false
