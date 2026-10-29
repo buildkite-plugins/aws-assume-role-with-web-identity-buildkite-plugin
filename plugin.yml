@@ -11,7 +11,7 @@ configuration:
     credential-name-prefix:
       type: string
     credential-process:
-      type: boolean
+      type: string
     hook:
       type: string
     role-arn:

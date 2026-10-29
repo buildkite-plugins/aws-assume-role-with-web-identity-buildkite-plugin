@@ -128,31 +128,42 @@ The `agent.buildkite.com:*` trust policy conditions and `session-tags` only appl
 - Limit the entry role's `sts:AssumeRole` permission to the specific target role ARNs it needs.
 - Have each target role trust only the entry role.
 
-### `credential-process` (optional, boolean)
+### `credential-process` (optional, string)
 
-When `true`, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes a self-contained [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html) helper script and an AWS config file referencing it, then exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up.
+The path to an executable that AWS SDKs and the AWS CLI should invoke as an external [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html). When set, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes an AWS config file referencing your script and exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up. The script itself is yours — the plugin never writes it — so it can be baked into your agent image or checked into your repository and reviewed like any other code.
 
-AWS SDKs and the AWS CLI invoke the helper whenever credentials are needed and re-invoke it when the returned credentials approach expiry. Each invocation requests a fresh Buildkite OIDC token and assumes the role again, so the job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
+AWS SDKs and the AWS CLI invoke the script whenever credentials are needed and re-invoke it when the returned credentials approach expiry. The script requests a fresh Buildkite OIDC token and assumes the role again on each invocation, so the job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
 
 ```yaml
 plugins:
   - aws-assume-role-with-web-identity#v1.8.1:
       role-arn: arn:aws:iam::111111111111:role/example-role
       role-session-duration: 43200
-      credential-process: true
+      credential-process: /usr/local/bin/aws-credential-process.sh
 ```
+
+A ready-to-use reference implementation ships in [`examples/credential-process.sh`](examples/credential-process.sh). Copy it somewhere your build commands can execute it and point this option at your copy. It reads the plugin's resolved configuration from the environment variables below, which the plugin exports in this mode:
+
+| Variable | Always set? | Content |
+| --- | --- | --- |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN` | yes | The `role-arn` option |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME` | yes | The resolved session name (`role-session-name`, or `buildkite-job-<job id>`) |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE` | yes | The resolved OIDC audience |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION` | when `role-session-duration` is set | The session duration in seconds |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME` | when `oidc-token-lifetime` or `role-session-duration` is set | The resolved OIDC token lifetime in seconds |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS` | when `session-tags` is set | The comma-separated claims to request as session tags |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN` | when `chain-role-arn` is set | The role to chain into after the first assumption |
 
 Notes:
 
-- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call. It then runs `sts get-caller-identity` through the generated config and fails the step if the resolved identity does not match the assumed role, so a credential source accidentally shadowing the config fails loudly instead of running as the wrong identity.
-- The helper invokes `buildkite-agent`, `aws`, and `jq` by the absolute paths resolved when the hook ran, so those binaries must stay in place for the job's lifetime. The job's `BUILDKITE_AGENT_ACCESS_TOKEN` must also be available in the environment wherever AWS calls run — it already is for build commands.
-- Each helper invocation writes the fresh OIDC token to a `0600` file and passes it to the AWS CLI as `file://...`, so the token never appears in the process list.
+- The script must exist and be executable when the plugin's hook runs; the step fails fast otherwise. Relative paths are resolved against the build directory.
+- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call. It then runs `sts get-caller-identity` through the generated config — which invokes your script — and fails the step if the resolved identity does not match the assumed role, so a broken script or a credential source accidentally shadowing the config fails loudly at step start instead of mid-job.
 - Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` and IRSA-style `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` variables are unset in this mode, and `AWS_SHARED_CREDENTIALS_FILE` is pointed at an empty file, because all of those take precedence over `credential_process`.
 - `AWS_EC2_METADATA_DISABLED=true` is exported, so a tool that ignores `AWS_CONFIG_FILE` fails instead of silently falling back to the node's instance profile via IMDS.
 - The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set to a non-default profile).
-- The temporary directory holding the helper and config file is removed by the plugin's `pre-exit` hook when the job ends.
+- The temporary directory holding the config file is removed by the plugin's `pre-exit` hook when the job ends.
 - Cannot be combined with `credential-name-prefix`.
-- With `chain-role-arn`, the chained `sts:AssumeRole` call happens inside the helper, so chained sessions (capped at one hour by AWS) are refreshed automatically as well.
+- With `chain-role-arn`, the chained `sts:AssumeRole` call is the script's job (the reference implementation does it), so chained sessions — capped at one hour by AWS — are refreshed automatically as well.
 
 ### `hook` (optional, string)
 
