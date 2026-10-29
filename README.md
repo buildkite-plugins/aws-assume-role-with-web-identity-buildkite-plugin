@@ -142,7 +142,21 @@ plugins:
       credential-process: /usr/local/bin/aws-credential-process.sh
 ```
 
-The script itself is yours — the plugin never writes it. Bake it into your agent image or check it into your repository, and review it like any other code. It must request the OIDC token and call `sts:AssumeRoleWithWebIdentity` itself, and print the resulting credentials as [credential_process JSON](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html). A minimal example:
+The script itself is yours — the plugin never writes it. Bake it into your agent image or check it into your repository, and review it like any other code. It must request the OIDC token and call `sts:AssumeRoleWithWebIdentity` itself, and print the resulting credentials as [credential_process JSON](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html).
+
+Plugin configuration does not survive into the command process on its own, so in this mode the plugin exports its resolved configuration for your script to read:
+
+| Variable | Always set? | Content |
+| --- | --- | --- |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN` | yes | The `role-arn` option |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME` | yes | The resolved session name (`role-session-name`, or `buildkite-job-<job id>`) |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE` | yes | The resolved OIDC audience |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION` | when `role-session-duration` is set | The session duration in seconds (`--duration-seconds`) |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME` | when `oidc-token-lifetime` or `role-session-duration` is set | The resolved OIDC token lifetime in seconds (`--lifetime`) |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS` | when `session-tags` is set | The comma-separated claims to request as session tags (`--aws-session-tag`) |
+| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN` | when `chain-role-arn` is set | The role to chain into with a follow-up `sts:AssumeRole` |
+
+A minimal example reading its configuration from those variables:
 
 ```bash
 #!/bin/bash
@@ -151,16 +165,15 @@ set -euo pipefail
 # Pass the OIDC token via file:// so it never appears in the process list.
 token_file=$(mktemp)
 trap 'rm -f "${token_file}"' EXIT
-buildkite-agent oidc request-token --audience sts.amazonaws.com > "${token_file}"
+buildkite-agent oidc request-token \
+  --audience "${AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE}" > "${token_file}"
 
 aws --no-sign-request sts assume-role-with-web-identity \
-  --role-arn arn:aws:iam::111111111111:role/example-role \
-  --role-session-name "buildkite-job-${BUILDKITE_JOB_ID}" \
+  --role-arn "${AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN}" \
+  --role-session-name "${AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME}" \
   --web-identity-token "file://${token_file}" \
 | jq '{Version: 1} + .Credentials'
 ```
-
-Mirror the rest of your plugin configuration in the script as needed: `--duration-seconds` for `role-session-duration`, `--lifetime` on the token request for `oidc-token-lifetime`, `--aws-session-tag` for `session-tags`, and a follow-up `sts:AssumeRole` for `chain-role-arn`.
 
 Notes:
 

@@ -8,7 +8,7 @@ load "$BATS_PLUGIN_PATH/load.bash"
 # Source the command and print environment variables to allow for assertions.
 # This could be done by skipping the "run" command, but it makes for a more readable test.
 run_test_command() {
-  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE AWS_SDK_LOAD_CONFIG AWS_EC2_METADATA_DISABLED AWS_SHARED_CREDENTIALS_FILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE)
+  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE AWS_SDK_LOAD_CONFIG AWS_EC2_METADATA_DISABLED AWS_SHARED_CREDENTIALS_FILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN)
   local NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}"
 
   ( # using a subshell to avoid polluting the test environment
@@ -668,6 +668,15 @@ run_test_command() {
   assert_output --partial "TESTRESULT:AWS_SDK_LOAD_CONFIG=1"
   assert_output --partial "TESTRESULT:AWS_EC2_METADATA_DISABLED=true"
 
+  # The plugin's resolved configuration is exported for the script to consume
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN=role123"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME=buildkite-job-job-uuid-42"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE=sts.amazonaws.com"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN=<value not set>"
+
   aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
   [ -f "$aws_config" ]
   grep -q '^\[default\]$' "$aws_config"
@@ -704,6 +713,32 @@ run_test_command() {
 
   assert_failure
   assert_output --partial "'credential-process' script is not executable: ${non_executable}"
+}
+
+@test "credential-process mode exports session config for the script" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="$PWD/tests/credential-process.sh"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="6800"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_0="organization_id"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_1="pipeline_id"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 6800 --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 6800 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION=6800"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME=6800"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS=organization_id,pipeline_id"
+  assert_output --partial "TESTRESULT:AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN=chain-role456"
+
+  unstub aws
+  unstub buildkite-agent
 }
 
 @test "credential-process mode resolves a relative script path to absolute" {

@@ -244,6 +244,24 @@ EOF
   export AWS_CONFIG_FILE="${aws_config}"
   export AWS_SDK_LOAD_CONFIG=1
   echo "AWS_CONFIG_FILE: ${aws_config}"
+
+  # Plugin configuration does not survive into the command process on its own,
+  # so export it for the credential_process script to consume.
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="${role_arn}"
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME="${session_name}"
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE="${audience}"
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="${ttl_seconds}"
+  fi
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME}"
+  fi
+  if [[ -n "${claims:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS="${claims}"
+  fi
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+  fi
 elif [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
   # Export credentials with prefix
   export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
