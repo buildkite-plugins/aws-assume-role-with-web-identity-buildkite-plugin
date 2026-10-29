@@ -10,6 +10,8 @@ configuration:
       type: string
     credential-name-prefix:
       type: string
+    credential-process:
+      type: string
     hook:
       type: string
     role-arn:

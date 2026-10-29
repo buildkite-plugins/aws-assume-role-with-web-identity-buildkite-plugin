@@ -56,6 +56,27 @@ if plugin_read_list_into_result BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTI
   echo "Including session tags in OIDC request: ${claims}"
 fi
 
+# credential-process mode points the AWS config at a user-supplied
+# credential_process script; the plugin never writes the script itself.
+credential_process_script="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS:-}"
+if [[ -n "${credential_process_script}" ]]; then
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]]; then
+    echo "🚨 'credential-process' cannot be combined with 'credential-name-prefix'"
+    exit 1
+  fi
+  if [[ ! -f "${credential_process_script}" ]]; then
+    echo "🚨 'credential-process' script not found: ${credential_process_script}"
+    exit 1
+  fi
+  if [[ ! -x "${credential_process_script}" ]]; then
+    echo "🚨 'credential-process' script is not executable: ${credential_process_script}"
+    exit 1
+  fi
+  # AWS SDKs and the AWS CLI invoke the script from whatever working directory
+  # the calling process has, so resolve it to an absolute path up front.
+  credential_process_script="$(cd "$(dirname "${credential_process_script}")" && pwd)/$(basename "${credential_process_script}")"
+fi
+
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
 
 # Capture stderr separately so a failure can be reported after "^^^ +++";
@@ -180,12 +201,74 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
   echo "Assumed chained role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${chain_role_response}")"
 fi
 
-# Export credentials with or without prefix
-if [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
+if [[ -n "${credential_process_script}" ]]; then
+  # credential-process mode: instead of exporting the static credentials
+  # obtained above (they only served as fail-fast validation), point
+  # AWS_CONFIG_FILE at the user-supplied credential_process script. AWS SDKs
+  # and the AWS CLI invoke it whenever credentials are needed and re-invoke it
+  # when the returned credentials approach expiry, so the job keeps valid AWS
+  # credentials for its whole lifetime regardless of the role session duration.
+  echo "~~~ :aws: Configuring credential_process for automatic credential refresh"
+  credential_process_dir=$(mktemp -d "${TMPDIR:-/tmp}/buildkite-aws-credential-process.XXXXXX")
+
+  # credential_process is read from the active profile; mirror AWS_PROFILE if
+  # set. In a config file the default profile is "[default]" — a
+  # "[profile default]" section matches nothing — so AWS_PROFILE=default gets
+  # the same header as an unset AWS_PROFILE.
+  if [[ -n "${AWS_PROFILE:-}" && "${AWS_PROFILE}" != "default" ]]; then
+    profile_header="[profile ${AWS_PROFILE}]"
+  else
+    profile_header="[default]"
+  fi
+  aws_config="${credential_process_dir}/aws-config"
+  cat > "${aws_config}" <<EOF
+${profile_header}
+credential_process = "${credential_process_script}"
+EOF
+
+  # Anything that outranks credential_process must not silently resolve to a
+  # different identity: static environment credentials and IRSA-style
+  # web-identity variables are unset, and the shared credentials file
+  # (~/.aws/credentials ranks above the config file) is replaced with an empty
+  # one.
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  unset AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE
+  : > "${credential_process_dir}/aws-shared-credentials"
+  export AWS_SHARED_CREDENTIALS_FILE="${credential_process_dir}/aws-shared-credentials"
+
+  # Without other credentials, a tool that ignores AWS_CONFIG_FILE would
+  # silently fall back to the node's instance profile via IMDS. Disable that
+  # fallback so the failure is loud instead.
+  export AWS_EC2_METADATA_DISABLED=true
+
+  export AWS_CONFIG_FILE="${aws_config}"
+  export AWS_SDK_LOAD_CONFIG=1
+  echo "AWS_CONFIG_FILE: ${aws_config}"
+
+  # Plugin configuration does not survive into the command process on its own,
+  # so export it for the credential_process script to consume.
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="${role_arn}"
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME="${session_name}"
+  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE="${audience}"
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="${ttl_seconds}"
+  fi
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME}"
+  fi
+  if [[ -n "${claims:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS="${claims}"
+  fi
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
+    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+  fi
+elif [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
+  # Export credentials with prefix
   export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
   export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
   export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 else
+  # Export credentials without prefix
   export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
   export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
   export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
