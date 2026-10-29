@@ -214,8 +214,8 @@ if [[ "${credential_process_mode}" == "true" ]]; then
 # so credentials are refreshed for as long as the job can request OIDC tokens.
 set -euo pipefail
 EOF
-    printf 'buildkite_oidc_token=$(%s)\n' "${serialized_request_token_cmd}"
-    printf 'response=$(%s --web-identity-token "${buildkite_oidc_token}")\n' "${serialized_assume_role_cmd}"
+    printf "buildkite_oidc_token=\$(%s)\n" "${serialized_request_token_cmd}"
+    printf "response=\$(%s --web-identity-token \"\${buildkite_oidc_token}\")\n" "${serialized_assume_role_cmd}"
     if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
       cat <<EOF
 credentials=\$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "\${response}")
