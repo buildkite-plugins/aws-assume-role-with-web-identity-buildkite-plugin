@@ -144,10 +144,13 @@ plugins:
 
 Notes:
 
-- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call.
-- The helper runs wherever the build command runs, so `buildkite-agent` (with the job's `BUILDKITE_AGENT_ACCESS_TOKEN`), `aws`, and `jq` must be on `PATH` there — the same requirements the plugin's hook already has.
-- Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` variables are unset in this mode, because environment credentials take precedence over `credential_process`.
-- The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set).
+- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call. It then runs `sts get-caller-identity` through the generated config and fails the step if the resolved identity does not match the assumed role, so a credential source accidentally shadowing the config fails loudly instead of running as the wrong identity.
+- The helper invokes `buildkite-agent`, `aws`, and `jq` by the absolute paths resolved when the hook ran, so those binaries must stay in place for the job's lifetime. The job's `BUILDKITE_AGENT_ACCESS_TOKEN` must also be available in the environment wherever AWS calls run — it already is for build commands.
+- Each helper invocation writes the fresh OIDC token to a `0600` file and passes it to the AWS CLI as `file://...`, so the token never appears in the process list.
+- Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` and IRSA-style `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` variables are unset in this mode, and `AWS_SHARED_CREDENTIALS_FILE` is pointed at an empty file, because all of those take precedence over `credential_process`.
+- `AWS_EC2_METADATA_DISABLED=true` is exported, so a tool that ignores `AWS_CONFIG_FILE` fails instead of silently falling back to the node's instance profile via IMDS.
+- The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set to a non-default profile).
+- The temporary directory holding the helper and config file is removed by the plugin's `pre-exit` hook when the job ends.
 - Cannot be combined with `credential-name-prefix`.
 - With `chain-role-arn`, the chained `sts:AssumeRole` call happens inside the helper, so chained sessions (capped at one hour by AWS) are refreshed automatically as well.
 
