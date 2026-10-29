@@ -6,7 +6,6 @@
     "AccessKeyId": "chain-access-key-id-value"
   },
   "AssumedRoleUser": {
-    "AssumedRoleId": "chain-assumed-role-id-value",
-    "Arn": "arn:aws:sts::111111111111:assumed-role/chain-role456/buildkite-job-job-uuid-42"
+    "AssumedRoleId": "chain-assumed-role-id-value"
   }
 }

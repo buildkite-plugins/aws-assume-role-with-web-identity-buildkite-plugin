@@ -130,7 +130,7 @@ The `agent.buildkite.com:*` trust policy conditions and `session-tags` only appl
 
 ### `credential-process` (optional, string)
 
-The path to an executable that AWS SDKs and the AWS CLI should invoke as an external [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html). When set, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes an AWS config file referencing your script and exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up. The script itself is yours — the plugin never writes it — so it can be baked into your agent image or checked into your repository and reviewed like any other code.
+The path to an executable that AWS SDKs and the AWS CLI should invoke as an external [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html). When set, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes an AWS config file referencing your script and exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up.
 
 AWS SDKs and the AWS CLI invoke the script whenever credentials are needed and re-invoke it when the returned credentials approach expiry. The script requests a fresh Buildkite OIDC token and assumes the role again on each invocation, so the job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
 
@@ -142,28 +142,34 @@ plugins:
       credential-process: /usr/local/bin/aws-credential-process.sh
 ```
 
-A ready-to-use reference implementation ships in [`examples/credential-process.sh`](examples/credential-process.sh). Copy it somewhere your build commands can execute it and point this option at your copy. It reads the plugin's resolved configuration from the environment variables below, which the plugin exports in this mode:
+The script itself is yours — the plugin never writes it. Bake it into your agent image or check it into your repository, and review it like any other code. It must request the OIDC token and call `sts:AssumeRoleWithWebIdentity` itself, and print the resulting credentials as [credential_process JSON](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html). A minimal example:
 
-| Variable | Always set? | Content |
-| --- | --- | --- |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN` | yes | The `role-arn` option |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME` | yes | The resolved session name (`role-session-name`, or `buildkite-job-<job id>`) |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE` | yes | The resolved OIDC audience |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION` | when `role-session-duration` is set | The session duration in seconds |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME` | when `oidc-token-lifetime` or `role-session-duration` is set | The resolved OIDC token lifetime in seconds |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS` | when `session-tags` is set | The comma-separated claims to request as session tags |
-| `AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN` | when `chain-role-arn` is set | The role to chain into after the first assumption |
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# Pass the OIDC token via file:// so it never appears in the process list.
+token_file=$(mktemp)
+trap 'rm -f "${token_file}"' EXIT
+buildkite-agent oidc request-token --audience sts.amazonaws.com > "${token_file}"
+
+aws --no-sign-request sts assume-role-with-web-identity \
+  --role-arn arn:aws:iam::111111111111:role/example-role \
+  --role-session-name "buildkite-job-${BUILDKITE_JOB_ID}" \
+  --web-identity-token "file://${token_file}" \
+| jq '{Version: 1} + .Credentials'
+```
+
+Mirror the rest of your plugin configuration in the script as needed: `--duration-seconds` for `role-session-duration`, `--lifetime` on the token request for `oidc-token-lifetime`, `--aws-session-tag` for `session-tags`, and a follow-up `sts:AssumeRole` for `chain-role-arn`.
 
 Notes:
 
 - The script must exist and be executable when the plugin's hook runs; the step fails fast otherwise. Relative paths are resolved against the build directory.
-- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call. It then runs `sts get-caller-identity` through the generated config — which invokes your script — and fails the step if the resolved identity does not match the assumed role, so a broken script or a credential source accidentally shadowing the config fails loudly at step start instead of mid-job.
+- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call.
 - Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` and IRSA-style `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` variables are unset in this mode, and `AWS_SHARED_CREDENTIALS_FILE` is pointed at an empty file, because all of those take precedence over `credential_process`.
 - `AWS_EC2_METADATA_DISABLED=true` is exported, so a tool that ignores `AWS_CONFIG_FILE` fails instead of silently falling back to the node's instance profile via IMDS.
 - The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set to a non-default profile).
-- The temporary directory holding the config file is removed by the plugin's `pre-exit` hook when the job ends.
 - Cannot be combined with `credential-name-prefix`.
-- With `chain-role-arn`, the chained `sts:AssumeRole` call is the script's job (the reference implementation does it), so chained sessions — capped at one hour by AWS — are refreshed automatically as well.
 
 ### `hook` (optional, string)
 

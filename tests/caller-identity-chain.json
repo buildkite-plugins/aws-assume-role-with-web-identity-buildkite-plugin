@@ -1,5 +1,0 @@
-{
-  "UserId": "chain-assumed-role-id-value",
-  "Account": "111111111111",
-  "Arn": "arn:aws:sts::111111111111:assumed-role/chain-role456/buildkite-job-job-uuid-42"
-}

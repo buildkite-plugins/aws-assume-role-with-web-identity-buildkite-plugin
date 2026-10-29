@@ -162,9 +162,6 @@ fi
 credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${assume_role_response}")
 echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
 read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
-# The identity the job is expected to run as; credential-process mode verifies
-# the resolved caller identity against it.
-assumed_role_arn=$(jq -r '.AssumedRoleUser.Arn // empty' <<< "${assume_role_response}")
 
 # Optionally chain into a second role with sts:AssumeRole, using the first role's credentials
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
@@ -202,7 +199,6 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
   credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${chain_role_response}")
   read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
   echo "Assumed chained role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${chain_role_response}")"
-  assumed_role_arn=$(jq -r '.AssumedRoleUser.Arn // empty' <<< "${chain_role_response}")
 fi
 
 if [[ -n "${credential_process_script}" ]]; then
@@ -248,61 +244,6 @@ EOF
   export AWS_CONFIG_FILE="${aws_config}"
   export AWS_SDK_LOAD_CONFIG=1
   echo "AWS_CONFIG_FILE: ${aws_config}"
-
-  # Plugin configuration does not survive into the command process on its own,
-  # so export it for the credential_process script to consume.
-  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="${role_arn}"
-  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME="${session_name}"
-  export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE="${audience}"
-  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION:-}" ]]; then
-    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="${ttl_seconds}"
-  fi
-  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME:-}" ]]; then
-    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME}"
-  fi
-  if [[ -n "${claims:-}" ]]; then
-    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS="${claims}"
-  fi
-  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
-    export AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
-  fi
-
-  # So the pre-exit hook can remove the working directory when the job ends.
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR="${credential_process_dir}"
-
-  # Exercise the full chain (config file -> credential_process script -> STS)
-  # and confirm the resolved identity matches the role assumed above. Without
-  # this, a broken script or a config that is not picked up would only surface
-  # mid-job, possibly as a different identity.
-  echo "Verifying the identity resolved through credential_process"
-  if [[ -z "${assumed_role_arn}" ]]; then
-    echo "^^^ +++"
-    echo "sts returned an unexpected response (no AssumedRoleUser.Arn); cannot verify the credential_process identity"
-    exit 1
-  fi
-  caller_identity_stderr=$(mktemp)
-  caller_identity=$(aws sts get-caller-identity 2>"${caller_identity_stderr}") || caller_identity_status=$?
-  caller_identity_err=$(<"${caller_identity_stderr}")
-  rm -f "${caller_identity_stderr}"
-  if [[ ${caller_identity_status:-0} -ne 0 ]]; then
-    echo "^^^ +++"
-    echo "credential_process verification failed: aws sts get-caller-identity did not succeed"
-    echo ""
-    echo "${caller_identity_err}"
-    exit 1
-  fi
-  caller_identity_arn=$(jq -r '.Arn // empty' <<< "${caller_identity}")
-  if [[ "${caller_identity_arn}" != "${assumed_role_arn}" ]]; then
-    echo "^^^ +++"
-    echo "credential_process resolved to an unexpected identity"
-    echo "Expected: ${assumed_role_arn}"
-    echo "Actual:   ${caller_identity_arn:-<none>}"
-    echo ""
-    echo "Something other than the generated AWS config file supplied the"
-    echo "credentials. Failing the step rather than running as that identity."
-    exit 1
-  fi
-  echo "Verified caller identity: ${caller_identity_arn}"
 elif [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
   # Export credentials with prefix
   export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
