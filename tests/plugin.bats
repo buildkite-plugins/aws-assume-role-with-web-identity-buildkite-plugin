@@ -8,7 +8,7 @@ load "$BATS_PLUGIN_PATH/load.bash"
 # Source the command and print environment variables to allow for assertions.
 # This could be done by skipping the "run" command, but it makes for a more readable test.
 run_test_command() {
-  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION)
+  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE AWS_SDK_LOAD_CONFIG)
   local NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}"
 
   ( # using a subshell to avoid polluting the test environment
@@ -636,4 +636,112 @@ run_test_command() {
 
   unstub aws
   unstub buildkite-agent
+}
+
+@test "credential-process mode writes config and helper instead of exporting AWS_ env vars" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+
+  assert_success
+  # The up-front assume-role call still happens, as fail-fast validation
+  assert_output --partial "Assumed role: assumed-role-id-value"
+  assert_output --partial "Configuring credential_process for automatic credential refresh"
+
+  # Static credentials must not be exported; the config file points at the helper
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_SDK_LOAD_CONFIG=1"
+
+  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
+  [ -f "$aws_config" ]
+  grep -q '^\[default\]$' "$aws_config"
+  grep -q '^credential_process = .*/credential-process\.sh$' "$aws_config"
+
+  helper_script=$(sed -n 's/^credential_process = //p' "$aws_config")
+  [ -x "$helper_script" ]
+  grep -q 'buildkite-agent oidc request-token --audience sts.amazonaws.com' "$helper_script"
+  grep -q -- '--role-arn role123' "$helper_script"
+  grep -q -- '--web-identity-token' "$helper_script"
+  grep -q "jq '{Version: 1} + .Credentials'" "$helper_script"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process helper assumes the role and prints credential_process JSON when invoked" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+
+  # Two invocations of each command: the plugin's validation call, then the helper's
+  stub buildkite-agent \
+    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
+    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+
+  run run_test_command
+  assert_success
+  helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = //p' {})
+
+  run "$helper_script"
+
+  assert_success
+  assert_output --partial '"Version": 1'
+  assert_output --partial '"AccessKeyId": "access-key-id-value"'
+  assert_output --partial '"SecretAccessKey": "secret-access-key-value"'
+  assert_output --partial '"SessionToken": "session-token-value"'
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process mode includes the chained assume-role in the helper" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN="chain-role456"
+
+  stub buildkite-agent \
+    "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'" \
+    "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json" \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+
+  run run_test_command
+  assert_success
+  helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = //p' {})
+  grep -q -- 'sts assume-role --role-arn chain-role456' "$helper_script"
+
+  run "$helper_script"
+
+  assert_success
+  assert_output --partial '"Version": 1'
+  assert_output --partial '"AccessKeyId": "chain-access-key-id-value"'
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process mode rejects credential-name-prefix" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX="MY_PREFIX_"
+
+  run run_test_command
+
+  assert_failure
+  assert_output --partial "'credential-process' cannot be combined with 'credential-name-prefix'"
 }

@@ -128,6 +128,29 @@ The `agent.buildkite.com:*` trust policy conditions and `session-tags` only appl
 - Limit the entry role's `sts:AssumeRole` permission to the specific target role ARNs it needs.
 - Have each target role trust only the entry role.
 
+### `credential-process` (optional, boolean)
+
+When `true`, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes a self-contained [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html) helper script and an AWS config file referencing it, then exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up.
+
+AWS SDKs and the AWS CLI invoke the helper whenever credentials are needed and re-invoke it when the returned credentials approach expiry. Each invocation requests a fresh Buildkite OIDC token and assumes the role again, so the job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
+
+```yaml
+plugins:
+  - aws-assume-role-with-web-identity#v1.8.1:
+      role-arn: arn:aws:iam::111111111111:role/example-role
+      role-session-duration: 43200
+      credential-process: true
+```
+
+Notes:
+
+- The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call.
+- The helper runs wherever the build command runs, so `buildkite-agent` (with the job's `BUILDKITE_AGENT_ACCESS_TOKEN`), `aws`, and `jq` must be on `PATH` there — the same requirements the plugin's hook already has.
+- Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` variables are unset in this mode, because environment credentials take precedence over `credential_process`.
+- The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set).
+- Cannot be combined with `credential-name-prefix`.
+- With `chain-role-arn`, the chained `sts:AssumeRole` call happens inside the helper, so chained sessions (capped at one hour by AWS) are refreshed automatically as well.
+
 ### `hook` (optional, string)
 
 The hook to run. Can be either `environment` (the default) or `pre-command`.
