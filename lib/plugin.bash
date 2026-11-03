@@ -10,30 +10,6 @@ DEFAULT_MAX_OIDC_TOKEN_LIFETIME=7200
 # shellcheck source=lib/shared.bash
 . "$DIR/shared.bash"
 
-# Region for one profile in an AWS config file. Prints nothing when absent.
-aws_config_region() {
-  local config_file="$1"
-  local profile_name="$2"
-  [[ -f "${config_file}" && -n "${profile_name}" ]] || return 0
-  awk -v profile="${profile_name}" '
-    /^[[:space:]]*[#;]/ { next }
-    /^[[:space:]]*\[/ {
-      section = $0
-      gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", section)
-      sub(/^profile[[:space:]]+/, "", section)
-      in_profile = (section == profile)
-      next
-    }
-    in_profile && /^[[:space:]]*region[[:space:]]*=/ {
-      sub(/^[[:space:]]*region[[:space:]]*=[[:space:]]*/, "")
-      sub(/[[:space:]]*[#;].*$/, "")
-      sub(/[[:space:]]*$/, "")
-      print
-      exit
-    }
-  ' "${config_file}"
-}
-
 if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; then
   echo "🚨 Missing 'role-arn' plugin configuration"
   exit 1
@@ -101,10 +77,6 @@ if [[ "${credential_process_mode}" == "true" ]]; then
     echo "🚨 'credential-process' requires 'buildkite-agent' on PATH"
     exit 1
   fi
-  # Optional at runtime. Absolute paths survive the limited PATH a SDK may use
-  # when it executes credential_process.
-  date_bin=$(command -v date || true)
-  flock_bin=$(command -v flock || true)
   env_bin=$(command -v env || true)
   if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" && -z "${env_bin}" ]]; then
     echo "🚨 'credential-process' requires 'env' on PATH when 'chain-role-arn' is set"
@@ -245,12 +217,17 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
   assumed_role_arn=$(jq -r '.AssumedRoleUser.Arn // empty' <<< "${chain_role_response}")
 fi
 
+if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
+  export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"
+  export AWS_REGION="${AWS_DEFAULT_REGION}"
+  echo "Using region: ${AWS_REGION}"
+fi
+
 if [[ "${credential_process_mode}" == "true" ]]; then
   # credential-process mode: instead of exporting the static credentials obtained
   # above (they only served as fail-fast validation), write a self-contained
-  # credential_process helper and point AWS_CONFIG_FILE at it. The helper caches
-  # credentials until shortly before they expire, then requests a fresh Buildkite
-  # OIDC token and assumes the role again.
+  # credential_process helper and point AWS_CONFIG_FILE at it. Each invocation
+  # requests a fresh Buildkite OIDC token and assumes the role again.
   echo "~~~ :aws: Configuring credential_process for automatic credential refresh"
   credential_process_dir=$(mktemp -d "${TMPDIR:-/tmp}/buildkite-aws-credential-process.XXXXXX")
   chmod 700 "${credential_process_dir}"
@@ -262,47 +239,13 @@ if [[ "${credential_process_mode}" == "true" ]]; then
 # (credential-process mode). Invoked by AWS SDKs and the AWS CLI as an external
 # credential process; see
 # https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html
-# Cached credentials are reused until five minutes before they expire. A refresh
-# mints a new Buildkite OIDC token and assumes the role again.
+# Each invocation mints a new Buildkite OIDC token and assumes the role again.
 set -euo pipefail
 EOF
     printf 'AWS_BIN=%q\n' "${aws_bin}"
     printf 'JQ_BIN=%q\n' "${jq_bin}"
-    printf 'DATE_BIN=%q\n' "${date_bin}"
-    printf 'FLOCK_BIN=%q\n' "${flock_bin}"
     printf 'CREDENTIAL_PROCESS_DIR=%q\n' "${credential_process_dir}"
     cat <<'EOF'
-
-cache_file="${CREDENTIAL_PROCESS_DIR}/credential-cache.json"
-if [[ -n "${FLOCK_BIN}" ]]; then
-  exec 9>"${CREDENTIAL_PROCESS_DIR}/credential-cache.lock"
-  "${FLOCK_BIN}" 9
-fi
-
-# Reuse credentials until five minutes before Expiration. The AWS CLI does not
-# cache credential_process output across processes.
-fresh_cache() {
-  local expiration exp_epoch now_epoch trimmed
-  [[ -n "${DATE_BIN}" && -s "${cache_file}" ]] || return 1
-  expiration=$("${JQ_BIN}" -r '.Expiration // empty' "${cache_file}" 2>/dev/null || true)
-  [[ "${expiration}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || return 1
-  trimmed="${expiration%%.*}"
-  trimmed="${trimmed%Z}"
-  trimmed="${trimmed%%+*}"
-  trimmed="${trimmed/T/ }"
-  if ! exp_epoch=$("${DATE_BIN}" -u -d "${trimmed}" +%s 2>/dev/null); then
-    exp_epoch=$("${DATE_BIN}" -u -j -f "%Y-%m-%d %H:%M:%S" "${trimmed}" +%s 2>/dev/null) || return 1
-  fi
-  now_epoch=$("${DATE_BIN}" -u +%s)
-  if (( exp_epoch > now_epoch + 300 )); then
-    return 0
-  fi
-  return 1
-}
-if fresh_cache; then
-  cat "${cache_file}"
-  exit 0
-fi
 
 # The OIDC token is passed to the AWS CLI via file:// so it never appears in
 # the process list. Child stderr stays in error_file: SDKs can log credential
@@ -376,12 +319,7 @@ if ! "${JQ_BIN}" -e '.Credentials.AccessKeyId // empty' <<< "${response}" > /dev
   echo "credential_process: sts response did not contain Credentials" >&2
   exit 1
 fi
-credential_json=$("${JQ_BIN}" '{Version: 1} + .Credentials' <<< "${response}")
-tmp_cache=$(mktemp "${CREDENTIAL_PROCESS_DIR}/credential-cache.XXXXXX")
-printf '%s\n' "${credential_json}" > "${tmp_cache}"
-chmod 600 "${tmp_cache}"
-mv -f "${tmp_cache}" "${cache_file}"
-printf '%s\n' "${credential_json}"
+"${JQ_BIN}" '{Version: 1} + .Credentials' <<< "${response}"
 EOF
   } > "${helper_script}"
   chmod +x "${helper_script}"
@@ -400,37 +338,12 @@ EOF
     profile_header="[default]"
   fi
 
-  # The generated config replaces AWS_CONFIG_FILE, and IMDS is disabled below.
-  # Keep the active region from the plugin option, the environment, or the
-  # profile about to be replaced. Other profile settings are not copied.
-  prior_region="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
-  resolved_region="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-${prior_region}}"
-  if [[ -z "${resolved_region}" ]]; then
-    existing_config="${AWS_CONFIG_FILE:-${HOME:-}/.aws/config}"
-    resolved_region="$(aws_config_region "${existing_config}" "${effective_profile}")"
-  fi
-  if [[ -n "${resolved_region}" && ! "${resolved_region}" =~ ^[A-Za-z0-9-]+$ ]]; then
-    echo "🚨 'credential-process' cannot copy this AWS region into the generated config"
-    exit 1
-  fi
-
   aws_config="${credential_process_dir}/aws-config"
-  {
-    printf '%s\n' "${profile_header}"
-    if [[ -n "${resolved_region}" ]]; then
-      printf 'region = %s\n' "${resolved_region}"
-    fi
-    printf 'credential_process = "%s"\n' "${helper_script}"
-  } > "${aws_config}"
+  cat > "${aws_config}" <<EOF
+${profile_header}
+credential_process = "${helper_script}"
+EOF
   chmod 600 "${aws_config}"
-
-  if [[ -n "${resolved_region}" ]]; then
-    export AWS_REGION="${resolved_region}"
-    export AWS_DEFAULT_REGION="${resolved_region}"
-    if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" || -z "${prior_region}" ]]; then
-      echo "Using region: ${AWS_REGION}"
-    fi
-  fi
 
   # Anything that outranks credential_process must not silently resolve to a
   # different identity. Container credential variables are how ECS task roles
@@ -446,8 +359,7 @@ EOF
 
   # Without other credentials, a tool that ignores AWS_CONFIG_FILE would
   # silently fall back to the node's instance profile via IMDS. Disable that
-  # fallback so the failure is loud instead. This also disables IMDS region
-  # lookup, which is why the region was resolved above.
+  # fallback so the failure is loud instead. IMDS region lookup is disabled too.
   export AWS_EC2_METADATA_DISABLED=true
 
   export AWS_CONFIG_FILE="${aws_config}"
@@ -500,10 +412,4 @@ else
   export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
   export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
   export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
-fi
-
-if [[ "${credential_process_mode}" != "true" && -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
-  export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"
-  export AWS_REGION="${AWS_DEFAULT_REGION}"
-  echo "Using region: ${AWS_REGION}"
 fi

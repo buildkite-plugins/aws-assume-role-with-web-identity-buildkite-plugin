@@ -1041,63 +1041,6 @@ reset_credential_process_env() {
   unstub buildkite-agent
 }
 
-@test "credential-process mode copies the active profile region before replacing the AWS config" {
-  reset_credential_process_env
-  export BUILDKITE_JOB_ID="job-uuid-42"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
-  export AWS_PROFILE="build"
-  old_config=$(mktemp)
-  cat > "${old_config}" <<'EOF'
-[profile build]
-region = eu-west-1
-output = json
-EOF
-  export AWS_CONFIG_FILE="${old_config}"
-
-  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
-
-  run run_test_command
-  assert_success
-  assert_output --partial "Using region: eu-west-1"
-  assert_output --partial "TESTRESULT:AWS_REGION=eu-west-1"
-  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
-  grep -q '^\[profile build\]$' "$aws_config"
-  grep -q '^region = eu-west-1$' "$aws_config"
-  ! grep -q '^output = ' "$aws_config"
-  rm -f "${old_config}"
-
-  unstub aws
-  unstub buildkite-agent
-}
-
-@test "credential-process mode lets the plugin region option replace a config region" {
-  reset_credential_process_env
-  export BUILDKITE_JOB_ID="job-uuid-42"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION="us-west-2"
-  export AWS_REGION="eu-west-1"
-
-  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
-
-  run run_test_command
-  assert_success
-  assert_output --partial "Using region: us-west-2"
-  assert_output --partial "TESTRESULT:AWS_REGION=us-west-2"
-  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
-  grep -q '^region = us-west-2$' "$aws_config"
-
-  unstub aws
-  unstub buildkite-agent
-}
-
 @test "credential-process helper serializes audience, session, duration, and tags" {
   reset_credential_process_env
   export BUILDKITE_JOB_ID="job-uuid-42"
@@ -1131,40 +1074,6 @@ EOF
   assert_success
   assert_output --partial '"AccessKeyId": "access-key-id-value"'
 
-  unstub aws
-  unstub buildkite-agent
-}
-
-@test "credential-process helper reuses cached credentials until near expiry" {
-  reset_credential_process_env
-  export BUILDKITE_JOB_ID="job-uuid-42"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
-  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
-  future=$(date -u -d "@$(( $(date -u +%s) + 172800 ))" +%Y-%m-%dT%H:%M:%SZ)
-  cached_sts=$(mktemp)
-  jq --arg exp "${future}" '.Credentials.Expiration = $exp' tests/sts.json > "${cached_sts}"
-
-  stub buildkite-agent \
-    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
-    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-2'"
-  stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat ${cached_sts}"
-
-  run run_test_command
-  assert_success
-  helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = "\(.*\)"$/\1/p' {})
-
-  run "$helper_script"
-  assert_success
-  assert_output --partial '"AccessKeyId": "access-key-id-value"'
-
-  run "$helper_script"
-  assert_success
-  assert_output --partial '"AccessKeyId": "access-key-id-value"'
-
-  rm -f "${cached_sts}"
   unstub aws
   unstub buildkite-agent
 }
