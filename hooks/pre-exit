@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Removes the credential_process working directory created by the environment
+# (or pre-command) hook. Only set when credential-process mode was used.
+
+credential_process_dir="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR:-}"
+
+if [[ -z "${credential_process_dir}" ]]; then
+	exit 0
+fi
+
+# Only remove a directory this plugin created.
+if [[ -d "${credential_process_dir}" && "$(basename "${credential_process_dir}")" == buildkite-aws-credential-process.* ]]; then
+	rm -rf "${credential_process_dir}"
+	echo "Removed credential_process working directory: ${credential_process_dir}"
+fi
