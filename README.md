@@ -132,7 +132,7 @@ The `agent.buildkite.com:*` trust policy conditions and `session-tags` only appl
 
 When `true`, the plugin does not export the assumed-role credentials as static environment variables. Instead it writes a self-contained [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html) helper script and an AWS config file referencing it, then exports `AWS_CONFIG_FILE` (and `AWS_SDK_LOAD_CONFIG=1`) so AWS SDKs and the AWS CLI pick it up.
 
-AWS SDKs and the AWS CLI invoke the helper whenever credentials are needed and re-invoke it when the returned credentials approach expiry. Each invocation requests a fresh Buildkite OIDC token and assumes the role again, so the job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
+AWS SDKs and the AWS CLI invoke the helper whenever credentials are needed. The helper caches the returned credentials until five minutes before they expire, then requests a fresh Buildkite OIDC token and assumes the role again. The AWS CLI does not cache `credential_process` output across processes, so the helper cache is what keeps a script that runs `aws` repeatedly from requesting a new token every time. The job keeps valid AWS credentials for its entire lifetime. This is useful for long-running jobs that would otherwise outlive a single role session — `AssumeRoleWithWebIdentity` sessions are capped at 12 hours, and static credentials exported at step start cannot be renewed.
 
 ```yaml
 plugins:
@@ -146,13 +146,14 @@ Notes:
 
 - The plugin still performs its usual assume-role call up front, so configuration errors (bad role ARN, trust policy, or session tags) fail fast at step start rather than on the first AWS call. It then runs `sts get-caller-identity` through the generated config and fails the step if the resolved identity does not match the assumed role, so a credential source accidentally shadowing the config fails loudly instead of running as the wrong identity.
 - The helper invokes `buildkite-agent`, `aws`, and `jq` by the absolute paths resolved when the hook ran, so those binaries must stay in place for the job's lifetime. The job's `BUILDKITE_AGENT_ACCESS_TOKEN` must also be available in the environment wherever AWS calls run — it already is for build commands.
-- Each helper invocation writes the fresh OIDC token to a `0600` file and passes it to the AWS CLI as `file://...`, so the token never appears in the process list.
-- Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` and IRSA-style `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` variables are unset in this mode, and `AWS_SHARED_CREDENTIALS_FILE` is pointed at an empty file, because all of those take precedence over `credential_process`.
-- `AWS_EC2_METADATA_DISABLED=true` is exported, so a tool that ignores `AWS_CONFIG_FILE` fails instead of silently falling back to the node's instance profile via IMDS.
-- The config is written for the active profile (`[default]`, or `[profile <name>]` if `AWS_PROFILE` is set to a non-default profile).
+- Each helper invocation writes the fresh OIDC token to a `0600` file and passes it to the AWS CLI as `file://...`, so the token never appears in the process list. Stderr from those commands is discarded; AWS SDKs can log `credential_process` stderr.
+- Static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`, IRSA-style `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE`, and container credential variables (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`, `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`) are unset in this mode, and `AWS_SHARED_CREDENTIALS_FILE` is pointed at an empty file. All of those can outrank `credential_process`, and clients that do not implement `credential_process` would otherwise keep an ECS task role or EKS Pod Identity.
+- `AWS_EC2_METADATA_DISABLED=true` is exported, so a tool that ignores `AWS_CONFIG_FILE` fails instead of silently falling back to the node's instance profile via IMDS. IMDS region lookup is disabled too.
+- The generated config replaces `AWS_CONFIG_FILE` and keeps only this profile's `credential_process` and region. The region comes from the plugin's `region` option, then `AWS_REGION` or `AWS_DEFAULT_REGION`, then the `region` already set on the active profile. Other settings in the previous AWS config are not copied. Set `region` when none of those sources has one.
+- The config is written for the active profile: `AWS_PROFILE`, otherwise `AWS_DEFAULT_PROFILE`, otherwise `[default]`. `AWS_PROFILE=default` still uses `[default]`, because `[profile default]` matches nothing.
 - The temporary directory holding the helper and config file is removed by the plugin's `pre-exit` hook when the job ends.
 - Cannot be combined with `credential-name-prefix`.
-- With `chain-role-arn`, the chained `sts:AssumeRole` call happens inside the helper, so chained sessions (capped at one hour by AWS) are refreshed automatically as well.
+- With `chain-role-arn`, the chained `sts:AssumeRole` call happens inside the helper, so chained sessions (capped at one hour by AWS) are refreshed automatically as well. The first hop's keys are written to a `0600` credentials file for that call rather than passed in the environment.
 
 ### `hook` (optional, string)
 

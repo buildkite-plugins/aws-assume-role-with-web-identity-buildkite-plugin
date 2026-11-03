@@ -8,7 +8,7 @@ load "$BATS_PLUGIN_PATH/load.bash"
 # Source the command and print environment variables to allow for assertions.
 # This could be done by skipping the "run" command, but it makes for a more readable test.
 run_test_command() {
-  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE AWS_SDK_LOAD_CONFIG AWS_EC2_METADATA_DISABLED AWS_SHARED_CREDENTIALS_FILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR)
+  local VARNAMES=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE AWS_SDK_LOAD_CONFIG AWS_EC2_METADATA_DISABLED AWS_SHARED_CREDENTIALS_FILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR)
   local NAME_PREFIX="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}"
 
   ( # using a subshell to avoid polluting the test environment
@@ -648,6 +648,10 @@ run_test_command() {
   export AWS_SESSION_TOKEN="pre-existing-session-token"
   export AWS_ROLE_ARN="arn:aws:iam::111111111111:role/irsa-role"
   export AWS_WEB_IDENTITY_TOKEN_FILE="/var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+  export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="/v2/credentials/task-role"
+  export AWS_CONTAINER_CREDENTIALS_FULL_URI="http://169.254.170.23/v2/credentials/task-role"
+  export AWS_CONTAINER_AUTHORIZATION_TOKEN="container-token"
+  export AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE="/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
@@ -668,6 +672,10 @@ run_test_command() {
   assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=<value not set>"
   assert_output --partial "TESTRESULT:AWS_ROLE_ARN=<value not set>"
   assert_output --partial "TESTRESULT:AWS_WEB_IDENTITY_TOKEN_FILE=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_CONTAINER_CREDENTIALS_FULL_URI=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_CONTAINER_AUTHORIZATION_TOKEN=<value not set>"
+  assert_output --partial "TESTRESULT:AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=<value not set>"
   assert_output --partial "TESTRESULT:AWS_SDK_LOAD_CONFIG=1"
   assert_output --partial "TESTRESULT:AWS_EC2_METADATA_DISABLED=true"
   refute_output --partial "TESTRESULT:BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR=<value not set>"
@@ -961,7 +969,9 @@ run_test_command() {
   assert_success
   assert_output --partial "Verified caller identity: arn:aws:sts::111111111111:assumed-role/chain-role456/buildkite-job-job-uuid-42"
   helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = "\(.*\)"$/\1/p' {})
-  grep -q -- 'sts assume-role --role-arn chain-role456' "$helper_script"
+  grep -q -- 'sts assume-role --role-arn "${CHAIN_ROLE_ARN}"' "$helper_script"
+  grep -q 'AWS_SHARED_CREDENTIALS_FILE="${chain_credentials_file}"' "$helper_script"
+  ! grep -q 'AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}"' "$helper_script"
 
   run "$helper_script"
 
@@ -983,4 +993,178 @@ run_test_command() {
 
   assert_failure
   assert_output --partial "'credential-process' cannot be combined with 'credential-name-prefix'"
+}
+
+reset_credential_process_env() {
+  unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_CONFIG_FILE
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_0
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_1
+  unset BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN
+}
+
+@test "credential-process mode honors AWS_DEFAULT_PROFILE and AWS_PROFILE precedence" {
+  reset_credential_process_env
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export AWS_DEFAULT_PROFILE="from-default"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json"
+
+  run run_test_command
+  assert_success
+  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
+  grep -q '^\[profile from-default\]$' "$aws_config"
+  unstub aws
+  unstub buildkite-agent
+
+  export AWS_PROFILE="from-profile"
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json"
+
+  run run_test_command
+  assert_success
+  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
+  grep -q '^\[profile from-profile\]$' "$aws_config"
+  ! grep -q 'from-default' "$aws_config"
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process mode copies the active profile region before replacing the AWS config" {
+  reset_credential_process_env
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export AWS_PROFILE="build"
+  old_config=$(mktemp)
+  cat > "${old_config}" <<'EOF'
+[profile build]
+region = eu-west-1
+output = json
+EOF
+  export AWS_CONFIG_FILE="${old_config}"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json"
+
+  run run_test_command
+  assert_success
+  assert_output --partial "Using region: eu-west-1"
+  assert_output --partial "TESTRESULT:AWS_REGION=eu-west-1"
+  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
+  grep -q '^\[profile build\]$' "$aws_config"
+  grep -q '^region = eu-west-1$' "$aws_config"
+  ! grep -q '^output = ' "$aws_config"
+  rm -f "${old_config}"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process mode lets the plugin region option replace a config region" {
+  reset_credential_process_env
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION="us-west-2"
+  export AWS_REGION="eu-west-1"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json"
+
+  run run_test_command
+  assert_success
+  assert_output --partial "Using region: us-west-2"
+  assert_output --partial "TESTRESULT:AWS_REGION=us-west-2"
+  aws_config=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p')
+  grep -q '^region = us-west-2$' "$aws_config"
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process helper serializes audience, session, duration, and tags" {
+  reset_credential_process_env
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE="my-aud"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_NAME="custom-session"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="1800"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="900"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_0="organization_id"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_1="pipeline_id"
+
+  stub buildkite-agent \
+    "oidc request-token --audience my-aud --lifetime 900 --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'" \
+    "oidc request-token --audience my-aud --lifetime 900 --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token-2'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token * : cat tests/sts.json"
+
+  run run_test_command
+  assert_success
+  helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = "\(.*\)"$/\1/p' {})
+  grep -q -- '--audience my-aud' "$helper_script"
+  grep -q -- '--lifetime 900' "$helper_script"
+  grep -F -q -- '--aws-session-tag organization_id\,pipeline_id' "$helper_script"
+  grep -q -- '--role-session-name custom-session' "$helper_script"
+  grep -q -- '--duration-seconds 1800' "$helper_script"
+
+  run "$helper_script"
+  assert_success
+  assert_output --partial '"AccessKeyId": "access-key-id-value"'
+
+  unstub aws
+  unstub buildkite-agent
+}
+
+@test "credential-process helper reuses cached credentials until near expiry" {
+  reset_credential_process_env
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
+  future=$(date -u -d "@$(( $(date -u +%s) + 172800 ))" +%Y-%m-%dT%H:%M:%SZ)
+  cached_sts=$(mktemp)
+  jq --arg exp "${future}" '.Credentials.Expiration = $exp' tests/sts.json > "${cached_sts}"
+
+  stub buildkite-agent \
+    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
+    "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-2'"
+  stub aws \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat ${cached_sts}"
+
+  run run_test_command
+  assert_success
+  helper_script=$(echo "$output" | sed -n 's/^TESTRESULT:AWS_CONFIG_FILE=//p' | xargs -I{} sed -n 's/^credential_process = "\(.*\)"$/\1/p' {})
+
+  run "$helper_script"
+  assert_success
+  assert_output --partial '"AccessKeyId": "access-key-id-value"'
+
+  run "$helper_script"
+  assert_success
+  assert_output --partial '"AccessKeyId": "access-key-id-value"'
+
+  rm -f "${cached_sts}"
+  unstub aws
+  unstub buildkite-agent
 }

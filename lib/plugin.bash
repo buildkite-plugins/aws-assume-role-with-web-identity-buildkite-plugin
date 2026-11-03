@@ -10,6 +10,30 @@ DEFAULT_MAX_OIDC_TOKEN_LIFETIME=7200
 # shellcheck source=lib/shared.bash
 . "$DIR/shared.bash"
 
+# Region for one profile in an AWS config file. Prints nothing when absent.
+aws_config_region() {
+  local config_file="$1"
+  local profile_name="$2"
+  [[ -f "${config_file}" && -n "${profile_name}" ]] || return 0
+  awk -v profile="${profile_name}" '
+    /^[[:space:]]*[#;]/ { next }
+    /^[[:space:]]*\[/ {
+      section = $0
+      gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", section)
+      sub(/^profile[[:space:]]+/, "", section)
+      in_profile = (section == profile)
+      next
+    }
+    in_profile && /^[[:space:]]*region[[:space:]]*=/ {
+      sub(/^[[:space:]]*region[[:space:]]*=[[:space:]]*/, "")
+      sub(/[[:space:]]*[#;].*$/, "")
+      sub(/[[:space:]]*$/, "")
+      print
+      exit
+    }
+  ' "${config_file}"
+}
+
 if [[ -z "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN:-}" ]]; then
   echo "🚨 Missing 'role-arn' plugin configuration"
   exit 1
@@ -75,6 +99,15 @@ if [[ "${credential_process_mode}" == "true" ]]; then
   fi
   if ! buildkite_agent_bin=$(command -v buildkite-agent); then
     echo "🚨 'credential-process' requires 'buildkite-agent' on PATH"
+    exit 1
+  fi
+  # Optional at runtime. Absolute paths survive the limited PATH a SDK may use
+  # when it executes credential_process.
+  date_bin=$(command -v date || true)
+  flock_bin=$(command -v flock || true)
+  env_bin=$(command -v env || true)
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" && -z "${env_bin}" ]]; then
+    echo "🚨 'credential-process' requires 'env' on PATH when 'chain-role-arn' is set"
     exit 1
   fi
   # Serialize the fully-built commands for the credential_process helper, before
@@ -215,10 +248,9 @@ fi
 if [[ "${credential_process_mode}" == "true" ]]; then
   # credential-process mode: instead of exporting the static credentials obtained
   # above (they only served as fail-fast validation), write a self-contained
-  # credential_process helper and point AWS_CONFIG_FILE at it. AWS SDKs and the
-  # AWS CLI invoke the helper whenever credentials are needed and re-invoke it
-  # when the returned credentials approach expiry, so the job keeps valid AWS
-  # credentials for its whole lifetime regardless of the role session duration.
+  # credential_process helper and point AWS_CONFIG_FILE at it. The helper caches
+  # credentials until shortly before they expire, then requests a fresh Buildkite
+  # OIDC token and assumes the role again.
   echo "~~~ :aws: Configuring credential_process for automatic credential refresh"
   credential_process_dir=$(mktemp -d "${TMPDIR:-/tmp}/buildkite-aws-credential-process.XXXXXX")
   chmod 700 "${credential_process_dir}"
@@ -230,20 +262,56 @@ if [[ "${credential_process_mode}" == "true" ]]; then
 # (credential-process mode). Invoked by AWS SDKs and the AWS CLI as an external
 # credential process; see
 # https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html
-# Each invocation mints a fresh Buildkite OIDC token and assumes the role anew,
-# so credentials are refreshed for as long as the job can request OIDC tokens.
+# Cached credentials are reused until five minutes before they expire. A refresh
+# mints a new Buildkite OIDC token and assumes the role again.
 set -euo pipefail
 EOF
     printf 'AWS_BIN=%q\n' "${aws_bin}"
     printf 'JQ_BIN=%q\n' "${jq_bin}"
+    printf 'DATE_BIN=%q\n' "${date_bin}"
+    printf 'FLOCK_BIN=%q\n' "${flock_bin}"
     printf 'CREDENTIAL_PROCESS_DIR=%q\n' "${credential_process_dir}"
     cat <<'EOF'
 
+cache_file="${CREDENTIAL_PROCESS_DIR}/credential-cache.json"
+if [[ -n "${FLOCK_BIN}" ]]; then
+  exec 9>"${CREDENTIAL_PROCESS_DIR}/credential-cache.lock"
+  "${FLOCK_BIN}" 9
+fi
+
+# Reuse credentials until five minutes before Expiration. The AWS CLI does not
+# cache credential_process output across processes.
+fresh_cache() {
+  local expiration exp_epoch now_epoch trimmed
+  [[ -n "${DATE_BIN}" && -s "${cache_file}" ]] || return 1
+  expiration=$("${JQ_BIN}" -r '.Expiration // empty' "${cache_file}" 2>/dev/null || true)
+  [[ "${expiration}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || return 1
+  trimmed="${expiration%%.*}"
+  trimmed="${trimmed%Z}"
+  trimmed="${trimmed%%+*}"
+  trimmed="${trimmed/T/ }"
+  if ! exp_epoch=$("${DATE_BIN}" -u -d "${trimmed}" +%s 2>/dev/null); then
+    exp_epoch=$("${DATE_BIN}" -u -j -f "%Y-%m-%d %H:%M:%S" "${trimmed}" +%s 2>/dev/null) || return 1
+  fi
+  now_epoch=$("${DATE_BIN}" -u +%s)
+  if (( exp_epoch > now_epoch + 300 )); then
+    return 0
+  fi
+  return 1
+}
+if fresh_cache; then
+  cat "${cache_file}"
+  exit 0
+fi
+
 # The OIDC token is passed to the AWS CLI via file:// so it never appears in
-# the process list.
+# the process list. Child stderr stays in error_file: SDKs can log credential
+# process stderr, and those tools may include credential material.
 token_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/oidc-token.XXXXXX")
 error_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/credential-process.XXXXXX")
-trap 'rm -f "${token_file}" "${error_file}"' EXIT
+chain_credentials_file=""
+empty_config=""
+trap 'rm -f "${token_file}" "${error_file}" "${chain_credentials_file}" "${empty_config}"' EXIT
 EOF
     printf "if ! buildkite_oidc_token=\$(%s 2>\"\${error_file}\"); then\n" "${serialized_request_token_cmd}"
     cat <<'EOF'
@@ -263,10 +331,41 @@ EOF
 fi
 EOF
     if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
-      cat <<EOF
-credentials=\$("\${JQ_BIN}" -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "\${response}")
-read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "\${credentials}"
-if ! response=\$(AWS_ACCESS_KEY_ID="\${ACCESS_KEY_ID}" AWS_SECRET_ACCESS_KEY="\${SECRET_ACCESS_KEY}" AWS_SESSION_TOKEN="\${SESSION_TOKEN}" "\${AWS_BIN}" sts assume-role --role-arn $(printf '%q' "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}") --role-session-name $(printf '%q' "${session_name}") 2>"\${error_file}"); then
+      printf 'CHAIN_ROLE_ARN=%q\n' "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+      printf 'CHAIN_SESSION_NAME=%q\n' "${session_name}"
+      printf 'ENV_BIN=%q\n' "${env_bin}"
+      cat <<'EOF'
+credentials=$("${JQ_BIN}" -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${response}")
+read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+chain_credentials_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/chain-credentials.XXXXXX")
+{
+  printf '%s\n' '[default]'
+  printf 'aws_access_key_id = %s\n' "${ACCESS_KEY_ID}"
+  printf 'aws_secret_access_key = %s\n' "${SECRET_ACCESS_KEY}"
+  printf 'aws_session_token = %s\n' "${SESSION_TOKEN}"
+} > "${chain_credentials_file}"
+empty_config=$(mktemp "${CREDENTIAL_PROCESS_DIR}/empty-config.XXXXXX")
+# First-hop keys stay in a 0600 file. env -u clears variables that would outrank
+# that file, including static keys a caller may have put in the environment.
+if ! response=$(
+  "${ENV_BIN}" \
+    -u AWS_ACCESS_KEY_ID \
+    -u AWS_SECRET_ACCESS_KEY \
+    -u AWS_SESSION_TOKEN \
+    -u AWS_ROLE_ARN \
+    -u AWS_WEB_IDENTITY_TOKEN_FILE \
+    -u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI \
+    -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
+    -u AWS_CONTAINER_AUTHORIZATION_TOKEN \
+    -u AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE \
+    -u AWS_DEFAULT_PROFILE \
+    AWS_PROFILE=default \
+    AWS_CONFIG_FILE="${empty_config}" \
+    AWS_SHARED_CREDENTIALS_FILE="${chain_credentials_file}" \
+    AWS_EC2_METADATA_DISABLED=true \
+    "${AWS_BIN}" sts assume-role --role-arn "${CHAIN_ROLE_ARN}" --role-session-name "${CHAIN_SESSION_NAME}" \
+    2>"${error_file}"
+); then
   echo "credential_process: sts assume-role for the chained role failed" >&2
   exit 1
 fi
@@ -277,41 +376,78 @@ if ! "${JQ_BIN}" -e '.Credentials.AccessKeyId // empty' <<< "${response}" > /dev
   echo "credential_process: sts response did not contain Credentials" >&2
   exit 1
 fi
-"${JQ_BIN}" '{Version: 1} + .Credentials' <<< "${response}"
+credential_json=$("${JQ_BIN}" '{Version: 1} + .Credentials' <<< "${response}")
+tmp_cache=$(mktemp "${CREDENTIAL_PROCESS_DIR}/credential-cache.XXXXXX")
+printf '%s\n' "${credential_json}" > "${tmp_cache}"
+chmod 600 "${tmp_cache}"
+mv -f "${tmp_cache}" "${cache_file}"
+printf '%s\n' "${credential_json}"
 EOF
   } > "${helper_script}"
   chmod +x "${helper_script}"
 
-  # credential_process is read from the active profile; mirror AWS_PROFILE if
-  # set. In a config file the default profile is "[default]" — a
-  # "[profile default]" section matches nothing — so AWS_PROFILE=default gets
-  # the same header as an unset AWS_PROFILE.
-  if [[ -n "${AWS_PROFILE:-}" && "${AWS_PROFILE}" != "default" ]]; then
-    profile_header="[profile ${AWS_PROFILE}]"
+  # credential_process is read from the active profile. AWS_PROFILE outranks
+  # AWS_DEFAULT_PROFILE. In a config file the default profile is "[default]" —
+  # a "[profile default]" section matches nothing.
+  effective_profile="${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-default}}"
+  if [[ "${effective_profile}" == *$'\n'* || "${effective_profile}" == *$'\r'* || "${effective_profile}" == *']'* ]]; then
+    echo "🚨 'credential-process' cannot use this AWS profile name"
+    exit 1
+  fi
+  if [[ -n "${effective_profile}" && "${effective_profile}" != "default" ]]; then
+    profile_header="[profile ${effective_profile}]"
   else
     profile_header="[default]"
   fi
+
+  # The generated config replaces AWS_CONFIG_FILE, and IMDS is disabled below.
+  # Keep the active region from the plugin option, the environment, or the
+  # profile about to be replaced. Other profile settings are not copied.
+  prior_region="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+  resolved_region="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-${prior_region}}"
+  if [[ -z "${resolved_region}" ]]; then
+    existing_config="${AWS_CONFIG_FILE:-${HOME:-}/.aws/config}"
+    resolved_region="$(aws_config_region "${existing_config}" "${effective_profile}")"
+  fi
+  if [[ -n "${resolved_region}" && ! "${resolved_region}" =~ ^[A-Za-z0-9-]+$ ]]; then
+    echo "🚨 'credential-process' cannot copy this AWS region into the generated config"
+    exit 1
+  fi
+
   aws_config="${credential_process_dir}/aws-config"
-  cat > "${aws_config}" <<EOF
-${profile_header}
-credential_process = "${helper_script}"
-EOF
+  {
+    printf '%s\n' "${profile_header}"
+    if [[ -n "${resolved_region}" ]]; then
+      printf 'region = %s\n' "${resolved_region}"
+    fi
+    printf 'credential_process = "%s"\n' "${helper_script}"
+  } > "${aws_config}"
   chmod 600 "${aws_config}"
 
+  if [[ -n "${resolved_region}" ]]; then
+    export AWS_REGION="${resolved_region}"
+    export AWS_DEFAULT_REGION="${resolved_region}"
+    if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" || -z "${prior_region}" ]]; then
+      echo "Using region: ${AWS_REGION}"
+    fi
+  fi
+
   # Anything that outranks credential_process must not silently resolve to a
-  # different identity: static environment credentials and IRSA-style
-  # web-identity variables are unset, and the shared credentials file
-  # (~/.aws/credentials ranks above the config file) is replaced with an empty
-  # one.
+  # different identity. Container credential variables are how ECS task roles
+  # and EKS Pod Identity are injected, and clients that do not implement
+  # credential_process would otherwise keep using them.
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
   unset AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE
+  unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI
+  unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
   : > "${credential_process_dir}/aws-shared-credentials"
   chmod 600 "${credential_process_dir}/aws-shared-credentials"
   export AWS_SHARED_CREDENTIALS_FILE="${credential_process_dir}/aws-shared-credentials"
 
   # Without other credentials, a tool that ignores AWS_CONFIG_FILE would
   # silently fall back to the node's instance profile via IMDS. Disable that
-  # fallback so the failure is loud instead.
+  # fallback so the failure is loud instead. This also disables IMDS region
+  # lookup, which is why the region was resolved above.
   export AWS_EC2_METADATA_DISABLED=true
 
   export AWS_CONFIG_FILE="${aws_config}"
@@ -366,7 +502,7 @@ else
   export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 fi
 
-if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
+if [[ "${credential_process_mode}" != "true" && -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
   export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"
   export AWS_REGION="${AWS_DEFAULT_REGION}"
   echo "Using region: ${AWS_REGION}"
