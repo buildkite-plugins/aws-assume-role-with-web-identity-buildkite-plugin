@@ -29,7 +29,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -45,13 +45,48 @@ run_test_command() {
   unstub buildkite-agent
 }
 
+@test "parses sts response when AWS_DEFAULT_OUTPUT is set to text" {
+  export BUILDKITE_JOB_ID="job-uuid-42"
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
+  # The plugin's --output json must override this; without it the AWS CLI
+  # would emit text and jq parsing would fail.
+  export AWS_DEFAULT_OUTPUT="text"
+
+  stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
+
+  # Emulate the AWS CLI's output-format resolution: text unless the command
+  # line pins --output json (which outranks AWS_DEFAULT_OUTPUT).
+  local fake_aws_dir
+  fake_aws_dir=$(mktemp -d)
+  cat > "${fake_aws_dir}/aws" <<'EOF'
+#!/usr/bin/env bash
+if [[ " $* " == *" --output json "* ]]; then
+  cat tests/sts.json
+else
+  printf 'ASSUMEDROLEID\taccess-key-id-value\tNone\n'
+fi
+EOF
+  chmod +x "${fake_aws_dir}/aws"
+  export PATH="${fake_aws_dir}:${PATH}"
+
+  run run_test_command
+
+  assert_success
+  assert_output --partial "Assumed role: assumed-role-id-value"
+  assert_output --partial "TESTRESULT:AWS_ACCESS_KEY_ID=access-key-id-value"
+  assert_output --partial "TESTRESULT:AWS_SECRET_ACCESS_KEY=secret-access-key-value"
+  assert_output --partial "TESTRESULT:AWS_SESSION_TOKEN=session-token-value"
+
+  unstub buildkite-agent
+}
+
 @test "requests OIDC token with custom audience" {
   export BUILDKITE_JOB_ID="job-uuid-42"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_AUDIENCE="my-custom-audience"
 
   stub buildkite-agent "oidc request-token --audience my-custom-audience : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -72,7 +107,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -129,7 +164,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'warn: 503 (attempt 2/5)' >&2; echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -147,7 +182,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '{\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '{\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
 
   run run_test_command
 
@@ -165,7 +200,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '<html><body>502 Bad Gateway</body></html>'"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '<html><body>502 Bad Gateway</body></html>'"
 
   run run_test_command
 
@@ -182,7 +217,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo 'Not authorized to perform sts:AssumeRoleWithWebIdentity' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo 'Not authorized to perform sts:AssumeRoleWithWebIdentity' >&2; exit 1"
 
   run run_test_command
 
@@ -206,7 +241,7 @@ run_test_command() {
   fake_jwt="header.${jwt_payload_b64}.signature"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -231,7 +266,7 @@ run_test_command() {
   fake_jwt="header.${jwt_payload_b64}.signature"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -253,7 +288,7 @@ run_test_command() {
   fake_jwt="header.${jwt_payload_b64}.signature"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -274,7 +309,7 @@ run_test_command() {
   fake_jwt="header.${jwt_payload_b64}.signature"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo '${fake_jwt}'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token ${fake_jwt} : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -292,7 +327,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'not-a-jwt-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token not-a-jwt-token : echo 'AccessDenied' >&2; exit 1"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token not-a-jwt-token : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -310,7 +345,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="300"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 300 : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -333,7 +368,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_OIDC_TOKEN_LIFETIME="7201"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 7201 : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -355,7 +390,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="6800"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 6800 : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 6800 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 6800 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -377,7 +412,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_SESSION_DURATION="43200"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --lifetime 7200 : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --duration-seconds 43200 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -399,7 +434,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION="eu-central-1"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -424,7 +459,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_SESSION_TAGS_1="pipeline_id"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -446,7 +481,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION="eu-central-1"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo \"STS-REGION:[\${AWS_REGION-<not set>}]\" 1>&2; cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo \"STS-REGION:[\${AWS_REGION-<not set>}]\" 1>&2; cat tests/sts.json"
 
   run run_test_command
 
@@ -473,7 +508,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_ROLE_ARN="role123"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -498,8 +533,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
 
   run run_test_command
 
@@ -526,8 +561,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name custom-session : cat tests/chain-sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name custom-session : cat tests/chain-sts.json"
 
   run run_test_command
 
@@ -546,8 +581,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : echo '{\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : echo '{\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
 
   run run_test_command
 
@@ -568,8 +603,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : echo 'AccessDenied' >&2; exit 1"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
 
@@ -590,8 +625,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
 
   run run_test_command
 
@@ -616,7 +651,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX="MY_PREFIX_"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json"
 
   run run_test_command
 
@@ -655,8 +690,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
 
@@ -712,9 +747,9 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-2'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json"
 
   run run_test_command
   assert_success
@@ -744,10 +779,10 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-2'" \
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-3'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts-refresh.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts-refresh.json"
 
   run run_test_command
   assert_success
@@ -775,8 +810,8 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience sts.amazonaws.com : echo 'agent blew up' >&2; exit 1"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
   assert_success
@@ -802,8 +837,8 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience sts.amazonaws.com : true"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
   assert_success
@@ -827,9 +862,9 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience sts.amazonaws.com : echo 'buildkite-oidc-token-2'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : echo 'AccessDenied' >&2; exit 1"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : echo 'AccessDenied' >&2; exit 1"
 
   run run_test_command
   assert_success
@@ -852,8 +887,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : echo '{\"UserId\":\"node-role-user\",\"Account\":\"111111111111\",\"Arn\":\"arn:aws:sts::111111111111:assumed-role/node-instance-role/i-0abcdef1234567890\"}'"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : echo '{\"UserId\":\"node-role-user\",\"Account\":\"111111111111\",\"Arn\":\"arn:aws:sts::111111111111:assumed-role/node-instance-role/i-0abcdef1234567890\"}'"
 
   run run_test_command
 
@@ -874,8 +909,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : echo 'Unable to locate credentials' >&2; exit 1"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : echo 'Unable to locate credentials' >&2; exit 1"
 
   run run_test_command
 
@@ -894,7 +929,7 @@ run_test_command() {
   export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS="true"
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
-  stub aws "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '{\"Credentials\":{\"AccessKeyId\":\"a\",\"SecretAccessKey\":\"b\",\"SessionToken\":\"c\"},\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
+  stub aws "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : echo '{\"Credentials\":{\"AccessKeyId\":\"a\",\"SecretAccessKey\":\"b\",\"SessionToken\":\"c\"},\"AssumedRoleUser\":{\"AssumedRoleId\":\"x\"}}'"
 
   run run_test_command
 
@@ -914,8 +949,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
 
@@ -935,8 +970,8 @@ run_test_command() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
 
@@ -959,11 +994,11 @@ run_test_command() {
     "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity-chain.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json" \
-    "sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity-chain.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token * : cat tests/sts.json" \
+    "--output json sts assume-role --role-arn chain-role456 --role-session-name buildkite-job-job-uuid-42 : cat tests/chain-sts.json"
 
   run run_test_command
   assert_success
@@ -1016,8 +1051,8 @@ reset_credential_process_env() {
 
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
   assert_success
@@ -1029,8 +1064,8 @@ reset_credential_process_env() {
   export AWS_PROFILE="from-profile"
   stub buildkite-agent "oidc request-token --audience sts.amazonaws.com * : echo 'buildkite-oidc-token'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name buildkite-job-job-uuid-42 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json"
 
   run run_test_command
   assert_success
@@ -1057,9 +1092,9 @@ reset_credential_process_env() {
     "oidc request-token --audience my-aud --lifetime 900 --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token'" \
     "oidc request-token --audience my-aud --lifetime 900 --aws-session-tag organization_id,pipeline_id : echo 'buildkite-oidc-token-2'"
   stub aws \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
-    "sts get-caller-identity : cat tests/caller-identity.json" \
-    "--no-sign-request sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token * : cat tests/sts.json"
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token buildkite-oidc-token : cat tests/sts.json" \
+    "--output json sts get-caller-identity : cat tests/caller-identity.json" \
+    "--no-sign-request --output json sts assume-role-with-web-identity --role-arn role123 --role-session-name custom-session --duration-seconds 1800 --web-identity-token * : cat tests/sts.json"
 
   run run_test_command
   assert_success

@@ -25,8 +25,10 @@ request_token_cmd=(buildkite-agent oidc request-token --audience "${audience}")
 # prepare AWS command; OIDC token and optional args to be added before executing
 # AssumeRoleWithWebIdentity is not signed,
 # so --no-sign-request stops the CLI from loading credentials it would not use
-# (on EC2, a fetch from instance metadata)
-assume_role_cmd=(aws --no-sign-request sts assume-role-with-web-identity
+# (on EC2, a fetch from instance metadata). --output json pins the response
+# format for jq: AWS_DEFAULT_OUTPUT or a config-file output setting could
+# otherwise select text.
+assume_role_cmd=(aws --no-sign-request --output json sts assume-role-with-web-identity
   --role-arn "$role_arn"
   --role-session-name "$session_name")
 
@@ -191,7 +193,7 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
     AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
     AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
     AWS_SESSION_TOKEN="${SESSION_TOKEN}" \
-    aws sts assume-role --role-arn "$chain_role_arn" --role-session-name "$session_name" 2>"$chain_role_stderr"
+    aws --output json sts assume-role --role-arn "$chain_role_arn" --role-session-name "$session_name" 2>"$chain_role_stderr"
   ) || chain_role_cmd_status=$?
   chain_role_err=$(<"$chain_role_stderr")
   rm -f "$chain_role_stderr"
@@ -306,7 +308,7 @@ if ! response=$(
     AWS_CONFIG_FILE="${empty_config}" \
     AWS_SHARED_CREDENTIALS_FILE="${chain_credentials_file}" \
     AWS_EC2_METADATA_DISABLED=true \
-    "${AWS_BIN}" sts assume-role --role-arn "${CHAIN_ROLE_ARN}" --role-session-name "${CHAIN_SESSION_NAME}" \
+    "${AWS_BIN}" --output json sts assume-role --role-arn "${CHAIN_ROLE_ARN}" --role-session-name "${CHAIN_SESSION_NAME}" \
     2>"${error_file}"
 ); then
   echo "credential_process: sts assume-role for the chained role failed" >&2
@@ -380,7 +382,7 @@ EOF
     exit 1
   fi
   caller_identity_stderr=$(mktemp)
-  caller_identity=$(aws sts get-caller-identity 2>"${caller_identity_stderr}") || caller_identity_status=$?
+  caller_identity=$(aws --output json sts get-caller-identity 2>"${caller_identity_stderr}") || caller_identity_status=$?
   caller_identity_err=$(<"${caller_identity_stderr}")
   rm -f "${caller_identity_stderr}"
   if [[ ${caller_identity_status:-0} -ne 0 ]]; then
