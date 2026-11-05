@@ -25,8 +25,10 @@ request_token_cmd=(buildkite-agent oidc request-token --audience "${audience}")
 # prepare AWS command; OIDC token and optional args to be added before executing
 # AssumeRoleWithWebIdentity is not signed,
 # so --no-sign-request stops the CLI from loading credentials it would not use
-# (on EC2, a fetch from instance metadata)
-assume_role_cmd=(aws --no-sign-request sts assume-role-with-web-identity
+# (on EC2, a fetch from instance metadata). --output json pins the response
+# format for jq: AWS_DEFAULT_OUTPUT or a config-file output setting could
+# otherwise select text.
+assume_role_cmd=(aws --no-sign-request --output json sts assume-role-with-web-identity
   --role-arn "$role_arn"
   --role-session-name "$session_name")
 
@@ -54,6 +56,39 @@ if plugin_read_list_into_result BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTI
   claims=$(join_by "," "${result[@]}")
   request_token_cmd+=(--aws-session-tag "${claims}")
   echo "Including session tags in OIDC request: ${claims}"
+fi
+
+credential_process_mode="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS:-false}"
+if [[ "${credential_process_mode}" == "true" ]]; then
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_NAME_PREFIX:-}" ]]; then
+    echo "🚨 'credential-process' cannot be combined with 'credential-name-prefix'"
+    exit 1
+  fi
+  # The credential_process helper runs in whatever environment the process that
+  # triggers it happens to have, which may not include this hook's PATH, so the
+  # tools it needs are baked in as absolute paths.
+  if ! aws_bin=$(command -v aws); then
+    echo "🚨 'credential-process' requires 'aws' on PATH"
+    exit 1
+  fi
+  if ! jq_bin=$(command -v jq); then
+    echo "🚨 'credential-process' requires 'jq' on PATH"
+    exit 1
+  fi
+  if ! buildkite_agent_bin=$(command -v buildkite-agent); then
+    echo "🚨 'credential-process' requires 'buildkite-agent' on PATH"
+    exit 1
+  fi
+  env_bin=$(command -v env || true)
+  if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" && -z "${env_bin}" ]]; then
+    echo "🚨 'credential-process' requires 'env' on PATH when 'chain-role-arn' is set"
+    exit 1
+  fi
+  # Serialize the fully-built commands for the credential_process helper, before
+  # the one-time OIDC token is appended to assume_role_cmd below. The helper
+  # mints a fresh token on every invocation instead.
+  serialized_request_token_cmd=$(printf '%q ' "${buildkite_agent_bin}" "${request_token_cmd[@]:1}")
+  serialized_assume_role_cmd=$(printf '%q ' "${aws_bin}" "${assume_role_cmd[@]:1}")
 fi
 
 echo "~~~ :buildkite::key::aws: Requesting an OIDC token for AWS from Buildkite"
@@ -141,6 +176,9 @@ fi
 credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${assume_role_response}")
 echo "Assumed role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${assume_role_response}")"
 read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+# The identity the job is expected to run as; credential-process mode verifies
+# the resolved caller identity against it.
+assumed_role_arn=$(jq -r '.AssumedRoleUser.Arn // empty' <<< "${assume_role_response}")
 
 # Optionally chain into a second role with sts:AssumeRole, using the first role's credentials
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
@@ -155,7 +193,7 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
     AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
     AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
     AWS_SESSION_TOKEN="${SESSION_TOKEN}" \
-    aws sts assume-role --role-arn "$chain_role_arn" --role-session-name "$session_name" 2>"$chain_role_stderr"
+    aws --output json sts assume-role --role-arn "$chain_role_arn" --role-session-name "$session_name" 2>"$chain_role_stderr"
   ) || chain_role_cmd_status=$?
   chain_role_err=$(<"$chain_role_stderr")
   rm -f "$chain_role_stderr"
@@ -178,21 +216,202 @@ if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}
   credentials=$(jq -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${chain_role_response}")
   read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
   echo "Assumed chained role: $(jq -r .AssumedRoleUser.AssumedRoleId <<< "${chain_role_response}")"
-fi
-
-# Export credentials with or without prefix
-if [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
-  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
-  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=${SESSION_TOKEN}"
-else
-  export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
-  export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
-  export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
+  assumed_role_arn=$(jq -r '.AssumedRoleUser.Arn // empty' <<< "${chain_role_response}")
 fi
 
 if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION:-}" ]]; then
   export AWS_DEFAULT_REGION="${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_REGION}"
   export AWS_REGION="${AWS_DEFAULT_REGION}"
   echo "Using region: ${AWS_REGION}"
+fi
+
+if [[ "${credential_process_mode}" == "true" ]]; then
+  # credential-process mode: instead of exporting the static credentials obtained
+  # above (they only served as fail-fast validation), write a self-contained
+  # credential_process helper and point AWS_CONFIG_FILE at it. Each invocation
+  # requests a fresh Buildkite OIDC token and assumes the role again.
+  echo "~~~ :aws: Configuring credential_process for automatic credential refresh"
+  credential_process_dir=$(mktemp -d "${TMPDIR:-/tmp}/buildkite-aws-credential-process.XXXXXX")
+  chmod 700 "${credential_process_dir}"
+  helper_script="${credential_process_dir}/credential-process.sh"
+  {
+    cat <<'EOF'
+#!/bin/bash
+# Generated by the aws-assume-role-with-web-identity Buildkite plugin
+# (credential-process mode). Invoked by AWS SDKs and the AWS CLI as an external
+# credential process; see
+# https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html
+# Each invocation mints a new Buildkite OIDC token and assumes the role again.
+set -euo pipefail
+EOF
+    printf 'AWS_BIN=%q\n' "${aws_bin}"
+    printf 'JQ_BIN=%q\n' "${jq_bin}"
+    printf 'CREDENTIAL_PROCESS_DIR=%q\n' "${credential_process_dir}"
+    cat <<'EOF'
+
+# The OIDC token is passed to the AWS CLI via file:// so it never appears in
+# the process list. Child stderr stays in error_file: SDKs can log credential
+# process stderr, and those tools may include credential material.
+token_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/oidc-token.XXXXXX")
+error_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/credential-process.XXXXXX")
+chain_credentials_file=""
+empty_config=""
+trap 'rm -f "${token_file}" "${error_file}" "${chain_credentials_file}" "${empty_config}"' EXIT
+EOF
+    printf "if ! buildkite_oidc_token=\$(%s 2>\"\${error_file}\"); then\n" "${serialized_request_token_cmd}"
+    cat <<'EOF'
+  echo "credential_process: failed to request a Buildkite OIDC token" >&2
+  exit 1
+fi
+if [[ -z "${buildkite_oidc_token}" ]]; then
+  echo "credential_process: Buildkite returned an empty OIDC token" >&2
+  exit 1
+fi
+printf '%s' "${buildkite_oidc_token}" > "${token_file}"
+EOF
+    printf "if ! response=\$(%s --web-identity-token \"file://\${token_file}\" 2>\"\${error_file}\"); then\n" "${serialized_assume_role_cmd}"
+    cat <<'EOF'
+  echo "credential_process: sts assume-role-with-web-identity failed" >&2
+  exit 1
+fi
+EOF
+    if [[ -n "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN:-}" ]]; then
+      printf 'CHAIN_ROLE_ARN=%q\n' "${BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CHAIN_ROLE_ARN}"
+      printf 'CHAIN_SESSION_NAME=%q\n' "${session_name}"
+      printf 'ENV_BIN=%q\n' "${env_bin}"
+      cat <<'EOF'
+credentials=$("${JQ_BIN}" -r '.Credentials | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' <<< "${response}")
+read -r ACCESS_KEY_ID SECRET_ACCESS_KEY SESSION_TOKEN <<< "${credentials}"
+chain_credentials_file=$(mktemp "${CREDENTIAL_PROCESS_DIR}/chain-credentials.XXXXXX")
+{
+  printf '%s\n' '[default]'
+  printf 'aws_access_key_id = %s\n' "${ACCESS_KEY_ID}"
+  printf 'aws_secret_access_key = %s\n' "${SECRET_ACCESS_KEY}"
+  printf 'aws_session_token = %s\n' "${SESSION_TOKEN}"
+} > "${chain_credentials_file}"
+empty_config=$(mktemp "${CREDENTIAL_PROCESS_DIR}/empty-config.XXXXXX")
+# First-hop keys stay in a 0600 file. env -u clears variables that would outrank
+# that file, including static keys a caller may have put in the environment.
+if ! response=$(
+  "${ENV_BIN}" \
+    -u AWS_ACCESS_KEY_ID \
+    -u AWS_SECRET_ACCESS_KEY \
+    -u AWS_SESSION_TOKEN \
+    -u AWS_ROLE_ARN \
+    -u AWS_WEB_IDENTITY_TOKEN_FILE \
+    -u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI \
+    -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
+    -u AWS_CONTAINER_AUTHORIZATION_TOKEN \
+    -u AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE \
+    -u AWS_DEFAULT_PROFILE \
+    AWS_PROFILE=default \
+    AWS_CONFIG_FILE="${empty_config}" \
+    AWS_SHARED_CREDENTIALS_FILE="${chain_credentials_file}" \
+    AWS_EC2_METADATA_DISABLED=true \
+    "${AWS_BIN}" --output json sts assume-role --role-arn "${CHAIN_ROLE_ARN}" --role-session-name "${CHAIN_SESSION_NAME}" \
+    2>"${error_file}"
+); then
+  echo "credential_process: sts assume-role for the chained role failed" >&2
+  exit 1
+fi
+EOF
+    fi
+    cat <<'EOF'
+if ! "${JQ_BIN}" -e '.Credentials.AccessKeyId // empty' <<< "${response}" > /dev/null 2>&1; then
+  echo "credential_process: sts response did not contain Credentials" >&2
+  exit 1
+fi
+"${JQ_BIN}" '{Version: 1} + .Credentials' <<< "${response}"
+EOF
+  } > "${helper_script}"
+  chmod +x "${helper_script}"
+
+  # credential_process is read from the active profile. AWS_PROFILE outranks
+  # AWS_DEFAULT_PROFILE. In a config file the default profile is "[default]" —
+  # a "[profile default]" section matches nothing.
+  effective_profile="${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-default}}"
+  if [[ "${effective_profile}" == *$'\n'* || "${effective_profile}" == *$'\r'* || "${effective_profile}" == *']'* ]]; then
+    echo "🚨 'credential-process' cannot use this AWS profile name"
+    exit 1
+  fi
+  if [[ -n "${effective_profile}" && "${effective_profile}" != "default" ]]; then
+    profile_header="[profile ${effective_profile}]"
+  else
+    profile_header="[default]"
+  fi
+
+  aws_config="${credential_process_dir}/aws-config"
+  cat > "${aws_config}" <<EOF
+${profile_header}
+credential_process = "${helper_script}"
+EOF
+  chmod 600 "${aws_config}"
+
+  # Anything that outranks credential_process must not silently resolve to a
+  # different identity. Container credential variables are how ECS task roles
+  # and EKS Pod Identity are injected, and clients that do not implement
+  # credential_process would otherwise keep using them.
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  unset AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE
+  unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI
+  unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
+  : > "${credential_process_dir}/aws-shared-credentials"
+  chmod 600 "${credential_process_dir}/aws-shared-credentials"
+  export AWS_SHARED_CREDENTIALS_FILE="${credential_process_dir}/aws-shared-credentials"
+
+  # Without other credentials, a tool that ignores AWS_CONFIG_FILE would
+  # silently fall back to the node's instance profile via IMDS. Disable that
+  # fallback so the failure is loud instead. IMDS region lookup is disabled too.
+  export AWS_EC2_METADATA_DISABLED=true
+
+  export AWS_CONFIG_FILE="${aws_config}"
+  export AWS_SDK_LOAD_CONFIG=1
+  echo "AWS_CONFIG_FILE: ${aws_config}"
+
+  # So the pre-exit hook can remove the working directory when the job ends.
+  export BUILDKITE_PLUGIN_AWS_ASSUME_ROLE_WITH_WEB_IDENTITY_CREDENTIAL_PROCESS_DIR="${credential_process_dir}"
+
+  # Exercise the full chain (config file -> credential_process helper -> STS)
+  # and confirm the resolved identity matches the role assumed above. Without
+  # this, a config that is not picked up would only surface mid-job, possibly
+  # as a different identity.
+  echo "Verifying the identity resolved through credential_process"
+  if [[ -z "${assumed_role_arn}" ]]; then
+    echo "^^^ +++"
+    echo "sts returned an unexpected response (no AssumedRoleUser.Arn); cannot verify the credential_process identity"
+    exit 1
+  fi
+  caller_identity_stderr=$(mktemp)
+  caller_identity=$(aws --output json sts get-caller-identity 2>"${caller_identity_stderr}") || caller_identity_status=$?
+  caller_identity_err=$(<"${caller_identity_stderr}")
+  rm -f "${caller_identity_stderr}"
+  if [[ ${caller_identity_status:-0} -ne 0 ]]; then
+    echo "^^^ +++"
+    echo "credential_process verification failed: aws sts get-caller-identity did not succeed"
+    echo ""
+    echo "${caller_identity_err}"
+    exit 1
+  fi
+  caller_identity_arn=$(jq -r '.Arn // empty' <<< "${caller_identity}")
+  if [[ "${caller_identity_arn}" != "${assumed_role_arn}" ]]; then
+    echo "^^^ +++"
+    echo "credential_process resolved to an unexpected identity"
+    echo "Expected: ${assumed_role_arn}"
+    echo "Actual:   ${caller_identity_arn:-<none>}"
+    echo ""
+    echo "Something other than the generated AWS config file supplied the"
+    echo "credentials. Failing the step rather than running as that identity."
+    exit 1
+  fi
+  echo "Verified caller identity: ${caller_identity_arn}"
+elif [[ -n "${CREDENTIAL_NAME_PREFIX}" ]]; then
+  # Export credentials with prefix
+  export "${CREDENTIAL_NAME_PREFIX}AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+  export "${CREDENTIAL_NAME_PREFIX}AWS_SESSION_TOKEN=${SESSION_TOKEN}"
+else
+  # Export credentials without prefix
+  export "AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+  export "AWS_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+  export "AWS_SESSION_TOKEN=${SESSION_TOKEN}"
 fi
